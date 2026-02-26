@@ -4,7 +4,12 @@ import type { User, Session } from 'better-auth';
 // for information about these interfaces
 declare global {
 	namespace App {
-		interface Locals { user?: User; session?: Session }
+		type Role = 'citizen' | 'driver' | 'admin';
+		interface Locals {
+			user?: User;
+			session?: Session;
+			role?: Role;
+		}
 
 		// interface Error {}
 		// interface Locals {}

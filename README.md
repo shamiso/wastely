@@ -1,42 +1,54 @@
-# sv
+# Wastely
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+Smart Waste Optimizer pilot built with SvelteKit remote functions, Turso, Better Auth, and S3-compatible media storage.
 
-## Creating a project
+## Stack
 
-If you're seeing this, you've probably already done this step. Congrats!
+- SvelteKit + Tailwind
+- Better Auth (email/password)
+- Drizzle ORM
+- Turso (libSQL)
+- S3-compatible object storage (Cloudflare R2 works)
 
-```sh
-# create a new project
-npx sv create my-app
+## Environment
+
+Copy `.env.example` to `.env` and fill all required values:
+
+- `TURSO_DATABASE_URL`
+- `TURSO_AUTH_TOKEN`
+- `BETTER_AUTH_SECRET`
+- `ORIGIN`
+- `S3_ACCESS_KEY_ID`
+- `S3_SECRET_ACCESS_KEY`
+- `S3_BUCKET`
+- `S3_ENDPOINT`
+- `S3_REGION`
+- `S3_FORCE_PATH_STYLE`
+
+## Install & Run
+
+```bash
+pnpm install
+pnpm db:generate
+pnpm db:push
+pnpm auth:schema
+pnpm dev
 ```
 
-To recreate this project with the same configuration:
+## Project Structure
 
-```sh
-# recreate this project
-pnpm dlx sv create --template minimal --types ts --add tailwindcss="plugins:none" better-auth="demo:password" drizzle="database:postgresql+postgresql:postgres.js+docker:yes" sveltekit-adapter="adapter:node" --install pnpm ./
+- `src/lib/server/services`: business/domain services
+- `src/lib/server/api/*.remote.ts`: SvelteKit remote functions (query/command/form)
+- `src/lib/server/db`: Drizzle schema + connection
+- `src/routes`: role-based UI sections
+
+## Roles
+
+Users are auto-provisioned as `citizen` on first login.
+
+To promote a user:
+
+```sql
+update user_role set role = 'driver' where user_id = '<USER_ID>';
+update user_role set role = 'admin' where user_id = '<USER_ID>';
 ```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
-
-```sh
-npm run build
-```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
