@@ -18,6 +18,7 @@ Copy `.env.example` to `.env` and fill all required values:
 - `TURSO_AUTH_TOKEN`
 - `BETTER_AUTH_SECRET`
 - `ORIGIN`
+- `AUTHZ_BYPASS` (`true` for local demo access across driver/admin pages)
 - `S3_ACCESS_KEY_ID`
 - `S3_SECRET_ACCESS_KEY`
 - `S3_BUCKET`
@@ -38,7 +39,7 @@ pnpm dev
 ## Project Structure
 
 - `src/lib/server/services`: business/domain services
-- `src/lib/server/api/*.remote.ts`: SvelteKit remote functions (query/command/form)
+- `src/lib/api/*.remote.ts`: SvelteKit remote functions (query/command/form)
 - `src/lib/server/db`: Drizzle schema + connection
 - `src/routes`: role-based UI sections
 

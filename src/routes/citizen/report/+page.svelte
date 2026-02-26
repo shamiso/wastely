@@ -1,5 +1,10 @@
 <script lang="ts">
 	import { createReport } from '$lib/api/citizen-reports.remote';
+	import LocationPickerMap from '$lib/components/LocationPickerMap.svelte';
+
+	let latitude = $state<number | null>(null);
+	let longitude = $state<number | null>(null);
+	let hasLocation = $derived(latitude !== null && longitude !== null);
 </script>
 
 <div class="space-y-6">
@@ -49,29 +54,29 @@
 			></textarea>
 		</label>
 
-		<label class="text-sm font-medium text-slate-700">
-			Latitude
-			<input
-				type="number"
-				step="0.000001"
-				name="latitude"
-				required
-				placeholder="-17.8252"
-				class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 outline-none ring-blue-500 focus:ring"
-			/>
+		<label class="text-sm font-medium text-slate-700 sm:col-span-2">
+			Location on map
+			<div class="mt-1">
+				<LocationPickerMap bind:latitude bind:longitude />
+			</div>
+			<div class="mt-2 flex flex-wrap gap-2 text-xs">
+				{#if hasLocation}
+					<span class="rounded-full bg-emerald-100 px-2.5 py-1 font-medium text-emerald-800">
+						Latitude: {latitude?.toFixed(6)}
+					</span>
+					<span class="rounded-full bg-emerald-100 px-2.5 py-1 font-medium text-emerald-800">
+						Longitude: {longitude?.toFixed(6)}
+					</span>
+				{:else}
+					<span class="rounded-full bg-amber-100 px-2.5 py-1 font-medium text-amber-800">
+						Click the map to select a point
+					</span>
+				{/if}
+			</div>
 		</label>
 
-		<label class="text-sm font-medium text-slate-700">
-			Longitude
-			<input
-				type="number"
-				step="0.000001"
-				name="longitude"
-				required
-				placeholder="31.0335"
-				class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 outline-none ring-blue-500 focus:ring"
-			/>
-		</label>
+		<input type="hidden" name="latitude" value={latitude ?? ''} />
+		<input type="hidden" name="longitude" value={longitude ?? ''} />
 
 		<label class="text-sm font-medium text-slate-700 sm:col-span-2">
 			Photo evidence
@@ -87,7 +92,8 @@
 		<div class="sm:col-span-2">
 			<button
 				type="submit"
-				class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+				disabled={!hasLocation}
+				class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
 			>
 				Submit report
 			</button>

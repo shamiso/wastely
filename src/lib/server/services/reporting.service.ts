@@ -130,6 +130,19 @@ export async function listOpenCitizenReports(): Promise<ReportWithPhoto[]> {
 	return rows.map(toReportWithPhoto);
 }
 
+export async function listAllCitizenReports(): Promise<ReportWithPhoto[]> {
+	const rows = await db
+		.select({
+			report: citizenReport,
+			photo: reportPhoto
+		})
+		.from(citizenReport)
+		.leftJoin(reportPhoto, eq(reportPhoto.reportId, citizenReport.id))
+		.orderBy(desc(citizenReport.createdAt));
+
+	return rows.map(toReportWithPhoto);
+}
+
 export async function resolveCitizenReport(reportId: number, status: ReportStatus = 'resolved') {
 	if (!reportStatuses.includes(status)) throw error(400, 'Invalid status');
 
@@ -144,6 +157,55 @@ export async function resolveCitizenReport(reportId: number, status: ReportStatu
 
 	if (!updated) throw error(404, 'Report not found');
 	return updated;
+}
+
+export async function updateCitizenReport(input: {
+	reportId: number;
+	category?: string;
+	description?: string;
+	zoneId?: number | null;
+	latitude?: number;
+	longitude?: number;
+}) {
+	const [existing] = await db
+		.select()
+		.from(citizenReport)
+		.where(eq(citizenReport.id, input.reportId))
+		.limit(1);
+
+	if (!existing) throw error(404, 'Report not found');
+
+	const patch: Partial<typeof citizenReport.$inferInsert> = {
+		updatedAt: Date.now()
+	};
+
+	if (input.category !== undefined) patch.category = normalizeCategory(input.category);
+	if (input.description !== undefined) {
+		const description = input.description.trim();
+		if (!description) throw error(400, 'Description is required');
+		patch.description = description;
+	}
+	if (input.zoneId !== undefined) patch.zoneId = input.zoneId;
+	if (input.latitude !== undefined) patch.latitude = input.latitude;
+	if (input.longitude !== undefined) patch.longitude = input.longitude;
+
+	const [updated] = await db
+		.update(citizenReport)
+		.set(patch)
+		.where(eq(citizenReport.id, input.reportId))
+		.returning();
+
+	return updated;
+}
+
+export async function deleteCitizenReport(reportId: number) {
+	const [deleted] = await db
+		.delete(citizenReport)
+		.where(eq(citizenReport.id, reportId))
+		.returning();
+
+	if (!deleted) throw error(404, 'Report not found');
+	return deleted;
 }
 
 export async function getReportById(reportId: number): Promise<ReportWithPhoto | null> {

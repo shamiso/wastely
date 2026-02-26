@@ -1,5 +1,6 @@
 <script lang="ts">
 	import {
+		deleteReport,
 		listOpenReports,
 		resolveReport,
 		runDispatch
@@ -24,6 +25,12 @@
 
 	async function closeReport(reportId: number, status: 'resolved' | 'rejected') {
 		await resolveReport({ reportId, status });
+		await openReports.refresh();
+	}
+
+	async function removeReport(reportId: number) {
+		if (!confirm(`Delete report #${reportId}?`)) return;
+		await deleteReport({ reportId });
 		await openReports.refresh();
 	}
 </script>
@@ -111,6 +118,13 @@
 									class="rounded bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-500"
 								>
 									Reject
+								</button>
+								<button
+									type="button"
+									onclick={() => removeReport(report.id)}
+									class="rounded border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50"
+								>
+									Delete
 								</button>
 							</div>
 						</div>

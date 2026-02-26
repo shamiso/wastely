@@ -1,15 +1,21 @@
-import { form, getRequestEvent, query } from '$app/server';
+import { command, form, getRequestEvent, query } from '$app/server';
 import { error } from '@sveltejs/kit';
 import { requireUser } from '$lib/server/services/authz.service';
 import {
 	createCitizenReport,
+	deleteCitizenReport,
 	getReportById,
-	listReportsByUser
+	listReportsByUser,
+	updateCitizenReport
 } from '$lib/server/services/reporting.service';
 
 function toNumber(value: unknown, field: string): number {
+	if (value === undefined || value === null || value === '') {
+		throw error(400, `${field} is required`);
+	}
+
 	const parsed = Number(value);
-	if (Number.isNaN(parsed)) throw error(400, `${field} must be a number`);
+	if (!Number.isFinite(parsed)) throw error(400, `${field} must be a number`);
 	return parsed;
 }
 
@@ -81,4 +87,45 @@ export const reportDetail = query('unchecked', async (input: { reportId: number 
 	}
 
 	return report;
+});
+
+export const updateMyReport = command(
+	'unchecked',
+	async (input: { reportId: number | string; category?: string; description?: string }) => {
+		const event = getRequestEvent();
+		const user = requireUser(event);
+		const reportId = Number(input.reportId);
+		const report = await getReportById(reportId);
+
+		if (!report) throw error(404, 'Report not found');
+		if (report.reporterUserId !== user.id && event.locals.role !== 'admin') {
+			throw error(403, 'Not allowed to update this report');
+		}
+		if (!['open', 'rejected'].includes(report.status) && event.locals.role !== 'admin') {
+			throw error(400, 'Only open/rejected reports can be edited');
+		}
+
+		return updateCitizenReport({
+			reportId,
+			category: input.category,
+			description: input.description
+		});
+	}
+);
+
+export const deleteMyReport = command('unchecked', async (input: { reportId: number | string }) => {
+	const event = getRequestEvent();
+	const user = requireUser(event);
+	const reportId = Number(input.reportId);
+	const report = await getReportById(reportId);
+
+	if (!report) throw error(404, 'Report not found');
+	if (report.reporterUserId !== user.id && event.locals.role !== 'admin') {
+		throw error(403, 'Not allowed to delete this report');
+	}
+	if (!['open', 'rejected'].includes(report.status) && event.locals.role !== 'admin') {
+		throw error(400, 'Only open/rejected reports can be deleted');
+	}
+
+	return deleteCitizenReport(reportId);
 });

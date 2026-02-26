@@ -1,5 +1,5 @@
 import { command, getRequestEvent, query } from '$app/server';
-import { requireRole } from '$lib/server/services/authz.service';
+import { requireUser } from '$lib/server/services/authz.service';
 import {
 	getAssignedRun,
 	submitRoadConditionIssue,
@@ -16,7 +16,7 @@ function toOptionalNumber(value: unknown): number | undefined {
 
 export const getCurrentRun = query(async () => {
 	const event = getRequestEvent();
-	const user = requireRole(event, 'driver');
+	const user = requireUser(event);
 	return getAssignedRun(user.id);
 });
 
@@ -29,7 +29,7 @@ export const submitStop = command(
 		notes?: string;
 	}) => {
 		const event = getRequestEvent();
-		const user = requireRole(event, 'driver');
+		const user = requireUser(event);
 
 		return submitStopUpdate({
 			driverUserId: user.id,
@@ -52,7 +52,7 @@ export const submitRoadIssue = command(
 		longitude?: number | string;
 	}) => {
 		const event = getRequestEvent();
-		const user = requireRole(event, 'driver');
+		const user = requireUser(event);
 		const severity = roadSeverities.includes(input.severity ?? 'medium')
 			? (input.severity as 'low' | 'medium' | 'high')
 			: 'medium';
