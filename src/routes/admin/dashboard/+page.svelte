@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { kpiSnapshot, zoneDemand } from '$lib/api/dashboard.remote';
+	import { datasetHealth, kpiSnapshot, zoneDemand } from '$lib/api/dashboard.remote';
 
 	const kpis = kpiSnapshot({});
 	const demand = zoneDemand({});
+	const dataset = datasetHealth();
 </script>
 
 <div class="space-y-6">
@@ -14,7 +15,7 @@
 		<button
 			type="button"
 			onclick={async () => {
-				await Promise.all([kpis.refresh(), demand.refresh()]);
+				await Promise.all([kpis.refresh(), demand.refresh(), dataset.refresh()]);
 			}}
 			class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-100"
 		>
@@ -87,4 +88,63 @@
 			</div>
 		{/if}
 	</section>
+
+	{#if dataset.ready}
+		<section class="space-y-3">
+			<h2 class="text-lg font-semibold tracking-tight">Integrated Dataset</h2>
+			<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+				<article class="rounded-xl bg-white p-4 ring-1 ring-slate-200">
+					<p class="text-xs uppercase tracking-wide text-slate-500">Citizen Reports</p>
+					<p class="mt-1 text-2xl font-semibold">{dataset.current.totalCitizenReports}</p>
+				</article>
+				<article class="rounded-xl bg-white p-4 ring-1 ring-slate-200">
+					<p class="text-xs uppercase tracking-wide text-slate-500">Driver Logs</p>
+					<p class="mt-1 text-2xl font-semibold">{dataset.current.totalDriverLogs}</p>
+				</article>
+				<article class="rounded-xl bg-white p-4 ring-1 ring-slate-200">
+					<p class="text-xs uppercase tracking-wide text-slate-500">Road Issues</p>
+					<p class="mt-1 text-2xl font-semibold">{dataset.current.totalRoadIssues}</p>
+				</article>
+				<article class="rounded-xl bg-white p-4 ring-1 ring-slate-200">
+					<p class="text-xs uppercase tracking-wide text-slate-500">Run Summaries</p>
+					<p class="mt-1 text-2xl font-semibold">{dataset.current.totalRunSummaries}</p>
+				</article>
+			</div>
+
+			<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+				<article class="rounded-xl bg-white p-4 ring-1 ring-slate-200">
+					<p class="text-xs uppercase tracking-wide text-slate-500">Zone Coverage</p>
+					<p class="mt-1 text-2xl font-semibold">{dataset.current.zoneCoveragePct.toFixed(0)}%</p>
+				</article>
+				<article class="rounded-xl bg-white p-4 ring-1 ring-slate-200">
+					<p class="text-xs uppercase tracking-wide text-slate-500">Photo Coverage</p>
+					<p class="mt-1 text-2xl font-semibold">{dataset.current.photoCoveragePct.toFixed(0)}%</p>
+				</article>
+				<article class="rounded-xl bg-white p-4 ring-1 ring-slate-200">
+					<p class="text-xs uppercase tracking-wide text-slate-500">Summary Coverage</p>
+					<p class="mt-1 text-2xl font-semibold">{dataset.current.summaryCoveragePct.toFixed(0)}%</p>
+				</article>
+			</div>
+
+			<div class="rounded-xl bg-white p-4 ring-1 ring-slate-200">
+				<p class="text-sm font-semibold text-slate-800">Update Monitoring</p>
+				<p class="mt-2 text-sm text-slate-600">
+					{dataset.current.recordsLast7Days} integrated records were added in the last 7 days, averaging
+					{dataset.current.dailyUpdateFrequency.toFixed(2)} updates per day.
+				</p>
+				<p class="mt-2 text-xs text-slate-500">
+					Last citizen update:
+					{dataset.current.lastCitizenReportAt
+						? new Date(dataset.current.lastCitizenReportAt).toLocaleString()
+						: 'No citizen report yet'}
+				</p>
+				<p class="mt-1 text-xs text-slate-500">
+					Last driver log:
+					{dataset.current.lastDriverLogAt
+						? new Date(dataset.current.lastDriverLogAt).toLocaleString()
+						: 'No driver log yet'}
+				</p>
+			</div>
+		</section>
+	{/if}
 </div>

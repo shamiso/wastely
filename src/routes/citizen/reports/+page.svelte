@@ -116,6 +116,12 @@
 						<p class="mt-2 text-sm text-slate-700">{report.description}</p>
 						<p class="mt-2 text-xs text-slate-500">
 							Lat/Lng: {report.latitude.toFixed(5)}, {report.longitude.toFixed(5)}
+							{#if report.zoneName}
+								• Zone: {report.zoneName}
+							{/if}
+						</p>
+						<p class="mt-1 text-xs text-slate-500">
+							Submitted {new Date(report.createdAt).toLocaleString()}
 						</p>
 
 						<div class="mt-3 flex flex-wrap gap-2">

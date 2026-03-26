@@ -1,8 +1,10 @@
 import { command, getRequestEvent, query } from '$app/server';
-import { requireUser } from '$lib/server/services/authz.service';
+import { requireExactRole } from '$lib/server/services/authz.service';
 import {
 	getAssignedRun,
+	startAssignedRun,
 	submitRoadConditionIssue,
+	submitRunSummary,
 	submitStopUpdate
 } from '$lib/server/services/driver.service';
 
@@ -16,8 +18,14 @@ function toOptionalNumber(value: unknown): number | undefined {
 
 export const getCurrentRun = query(async () => {
 	const event = getRequestEvent();
-	const user = requireUser(event);
+	const user = requireExactRole(event, 'driver');
 	return getAssignedRun(user.id);
+});
+
+export const startRun = command('unchecked', async (input: { runId: number | string }) => {
+	const event = getRequestEvent();
+	const user = requireExactRole(event, 'driver');
+	return startAssignedRun(user.id, Number(input.runId));
 });
 
 export const submitStop = command(
@@ -29,7 +37,7 @@ export const submitStop = command(
 		notes?: string;
 	}) => {
 		const event = getRequestEvent();
-		const user = requireUser(event);
+		const user = requireExactRole(event, 'driver');
 
 		return submitStopUpdate({
 			driverUserId: user.id,
@@ -52,7 +60,7 @@ export const submitRoadIssue = command(
 		longitude?: number | string;
 	}) => {
 		const event = getRequestEvent();
-		const user = requireUser(event);
+		const user = requireExactRole(event, 'driver');
 		const severity = roadSeverities.includes(input.severity ?? 'medium')
 			? (input.severity as 'low' | 'medium' | 'high')
 			: 'medium';
@@ -65,6 +73,31 @@ export const submitRoadIssue = command(
 			description: input.description,
 			latitude: toOptionalNumber(input.latitude),
 			longitude: toOptionalNumber(input.longitude)
+		});
+	}
+);
+
+export const submitRunSummaryEntry = command(
+	'unchecked',
+	async (input: {
+		runId: number | string;
+		collectionVolumeKg?: number | string;
+		issues?: string;
+		delays?: string;
+		roadConditions?: string;
+		missedPickups?: number | string;
+	}) => {
+		const event = getRequestEvent();
+		const user = requireExactRole(event, 'driver');
+
+		return submitRunSummary({
+			driverUserId: user.id,
+			runId: Number(input.runId),
+			collectionVolumeKg: toOptionalNumber(input.collectionVolumeKg),
+			issues: input.issues,
+			delays: input.delays,
+			roadConditions: input.roadConditions,
+			missedPickups: toOptionalNumber(input.missedPickups)
 		});
 	}
 );

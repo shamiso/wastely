@@ -1,7 +1,8 @@
 import { desc, eq, inArray } from 'drizzle-orm';
 import { error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { citizenReport, reportPhoto } from '$lib/server/db/schema';
+import { citizenReport, reportPhoto, zone } from '$lib/server/db/schema';
+import { resolveZoneFromCoordinates } from '$lib/server/services/geo.service';
 import { uploadReportPhoto } from '$lib/server/services/storage.service';
 
 const reportCategories = ['uncollected', 'illegal_dumping', 'overflowing_bin', 'other'] as const;
@@ -19,6 +20,7 @@ export type ReportWithPhoto = {
 	latitude: number;
 	longitude: number;
 	zoneId: number | null;
+	zoneName: string | null;
 	createdAt: number;
 	updatedAt: number;
 	photoUrl: string | null;
@@ -46,6 +48,7 @@ function normalizeCategory(category: string): ReportCategory {
 function toReportWithPhoto(row: {
 	report: typeof citizenReport.$inferSelect;
 	photo: typeof reportPhoto.$inferSelect | null;
+	zone: typeof zone.$inferSelect | null;
 }): ReportWithPhoto {
 	return {
 		id: row.report.id,
@@ -56,6 +59,7 @@ function toReportWithPhoto(row: {
 		latitude: row.report.latitude,
 		longitude: row.report.longitude,
 		zoneId: row.report.zoneId,
+		zoneName: row.zone?.name ?? null,
 		createdAt: row.report.createdAt,
 		updatedAt: row.report.updatedAt,
 		photoUrl: row.photo?.publicUrl ?? null
@@ -68,6 +72,10 @@ export async function createCitizenReport(input: CreateReportInput): Promise<Rep
 
 	const category = normalizeCategory(input.category);
 	const timestamp = Date.now();
+	const resolvedZone =
+		input.zoneId === undefined || input.zoneId === null
+			? await resolveZoneFromCoordinates(input.latitude, input.longitude)
+			: null;
 	const [created] = await db
 		.insert(citizenReport)
 		.values({
@@ -76,7 +84,7 @@ export async function createCitizenReport(input: CreateReportInput): Promise<Rep
 			description,
 			latitude: input.latitude,
 			longitude: input.longitude,
-			zoneId: input.zoneId ?? null,
+			zoneId: input.zoneId ?? resolvedZone?.zoneId ?? null,
 			updatedAt: timestamp
 		})
 		.returning();
@@ -99,17 +107,26 @@ export async function createCitizenReport(input: CreateReportInput): Promise<Rep
 		})
 		.returning();
 
-	return toReportWithPhoto({ report: created, photo: photoRow });
+	const zoneRow =
+		created.zoneId === null
+			? null
+			: (
+					await db.select().from(zone).where(eq(zone.id, created.zoneId)).limit(1)
+				)[0] ?? null;
+
+	return toReportWithPhoto({ report: created, photo: photoRow, zone: zoneRow });
 }
 
 export async function listReportsByUser(userId: string): Promise<ReportWithPhoto[]> {
 	const rows = await db
 		.select({
 			report: citizenReport,
-			photo: reportPhoto
+			photo: reportPhoto,
+			zone: zone
 		})
 		.from(citizenReport)
 		.leftJoin(reportPhoto, eq(reportPhoto.reportId, citizenReport.id))
+		.leftJoin(zone, eq(citizenReport.zoneId, zone.id))
 		.where(eq(citizenReport.reporterUserId, userId))
 		.orderBy(desc(citizenReport.createdAt));
 
@@ -120,10 +137,12 @@ export async function listOpenCitizenReports(): Promise<ReportWithPhoto[]> {
 	const rows = await db
 		.select({
 			report: citizenReport,
-			photo: reportPhoto
+			photo: reportPhoto,
+			zone: zone
 		})
 		.from(citizenReport)
 		.leftJoin(reportPhoto, eq(reportPhoto.reportId, citizenReport.id))
+		.leftJoin(zone, eq(citizenReport.zoneId, zone.id))
 		.where(inArray(citizenReport.status, ['open', 'in_review']))
 		.orderBy(desc(citizenReport.createdAt));
 
@@ -134,10 +153,12 @@ export async function listAllCitizenReports(): Promise<ReportWithPhoto[]> {
 	const rows = await db
 		.select({
 			report: citizenReport,
-			photo: reportPhoto
+			photo: reportPhoto,
+			zone: zone
 		})
 		.from(citizenReport)
 		.leftJoin(reportPhoto, eq(reportPhoto.reportId, citizenReport.id))
+		.leftJoin(zone, eq(citizenReport.zoneId, zone.id))
 		.orderBy(desc(citizenReport.createdAt));
 
 	return rows.map(toReportWithPhoto);
@@ -212,10 +233,12 @@ export async function getReportById(reportId: number): Promise<ReportWithPhoto |
 	const [row] = await db
 		.select({
 			report: citizenReport,
-			photo: reportPhoto
+			photo: reportPhoto,
+			zone: zone
 		})
 		.from(citizenReport)
 		.leftJoin(reportPhoto, eq(reportPhoto.reportId, citizenReport.id))
+		.leftJoin(zone, eq(citizenReport.zoneId, zone.id))
 		.where(eq(citizenReport.id, reportId))
 		.limit(1);
 

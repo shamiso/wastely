@@ -20,10 +20,25 @@ function isAuthzBypassEnabled(): boolean {
 	return dev;
 }
 
+function isExplicitAuthzBypassEnabled(): boolean {
+	const raw = env.AUTHZ_BYPASS?.toLowerCase();
+	return raw ? ['1', 'true', 'yes', 'on'].includes(raw) : false;
+}
+
 export function hasMinimumRole(currentRole: AppRole | null | undefined, requiredRole: AppRole): boolean {
 	if (isAuthzBypassEnabled()) return true;
 	if (!currentRole) return false;
 	return roleRank[currentRole] >= roleRank[requiredRole];
+}
+
+export function hasExactRole(currentRole: AppRole | null | undefined, requiredRole: AppRole): boolean {
+	if (isExplicitAuthzBypassEnabled()) return true;
+	return currentRole === requiredRole;
+}
+
+export function toAppRole(value: string | null | undefined): AppRole {
+	if (value === 'driver' || value === 'admin') return value;
+	return 'citizen';
 }
 
 export function resolveHomePath(role: AppRole | null | undefined): string {
@@ -66,6 +81,12 @@ export function requireRole(event: RequestEvent, role: AppRole) {
 	return user;
 }
 
+export function requireExactRole(event: RequestEvent, role: AppRole) {
+	const user = requireUser(event);
+	if (!hasExactRole(event.locals.role, role)) throw error(403, 'You do not have permission.');
+	return user;
+}
+
 export function requireSessionRedirect(event: RequestEvent, path = '/login') {
 	if (!event.locals.user) throw redirect(302, path);
 }
@@ -73,4 +94,9 @@ export function requireSessionRedirect(event: RequestEvent, path = '/login') {
 export function requireRoleRedirect(event: RequestEvent, role: AppRole, path = '/') {
 	requireSessionRedirect(event);
 	if (!hasMinimumRole(event.locals.role, role)) throw redirect(302, path);
+}
+
+export function requireExactRoleRedirect(event: RequestEvent, role: AppRole) {
+	requireSessionRedirect(event);
+	if (!hasExactRole(event.locals.role, role)) throw redirect(302, resolveHomePath(event.locals.role));
 }

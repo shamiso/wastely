@@ -2,10 +2,12 @@
 	import {
 		deleteReport,
 		listAllReports,
+		listDriverLogs,
 		resolveReport
 	} from '$lib/api/admin-dispatch.remote';
 
 	const reports = listAllReports();
+	const driverLogs = listDriverLogs({ limit: 20 });
 
 	async function setStatus(reportId: number, status: 'resolved' | 'rejected') {
 		await resolveReport({ reportId, status });
@@ -23,7 +25,7 @@
 	<div class="flex items-center justify-between gap-2">
 		<div>
 			<h1 class="text-2xl font-semibold tracking-tight">Report Queue</h1>
-			<p class="text-sm text-slate-600">Operational view of unresolved citizen issues.</p>
+			<p class="text-sm text-slate-600">Operational view of citizen reports and driver-submitted logs.</p>
 		</div>
 		<a
 			href="/admin/dispatch"
@@ -74,6 +76,12 @@
 					<p class="mt-2 text-sm text-slate-700">{report.description}</p>
 					<p class="mt-1 text-xs text-slate-500">
 						Lat/Lng: {report.latitude.toFixed(5)}, {report.longitude.toFixed(5)}
+						{#if report.zoneName}
+							• Zone: {report.zoneName}
+						{/if}
+					</p>
+					<p class="mt-1 text-xs text-slate-500">
+						Submitted {new Date(report.createdAt).toLocaleString()}
 					</p>
 					{#if report.photoUrl}
 						<a
@@ -89,4 +97,55 @@
 			{/each}
 		</div>
 	{/if}
+
+	<section class="space-y-3">
+		<div class="flex items-center justify-between gap-2">
+			<h2 class="text-lg font-semibold tracking-tight">Driver Logs</h2>
+			<button
+				type="button"
+				onclick={() => driverLogs.refresh()}
+				class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-100"
+			>
+				Refresh logs
+			</button>
+		</div>
+
+		{#if driverLogs.loading && !driverLogs.ready}
+			<p class="text-sm text-slate-500">Loading driver logs...</p>
+		{:else if driverLogs.ready && driverLogs.current.length === 0}
+			<p class="rounded-lg bg-white p-4 text-sm text-slate-600 ring-1 ring-slate-200">
+				No driver logs yet.
+			</p>
+		{:else if driverLogs.ready}
+			<div class="grid gap-3">
+				{#each driverLogs.current as log}
+					<article class="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+						<div class="flex flex-wrap items-center justify-between gap-2">
+							<p class="text-sm font-semibold text-slate-900">
+								{log.type === 'run_summary' ? 'Run summary' : 'Road condition'} • Driver {log.driverUserId}
+							</p>
+							<span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+								{new Date(log.createdAt).toLocaleString()}
+							</span>
+						</div>
+						<p class="mt-2 text-sm text-slate-700">{log.summary}</p>
+						<p class="mt-2 text-xs text-slate-500">
+							{#if log.runId}
+								Run #{log.runId}
+							{/if}
+							{#if log.zoneName}
+								{log.runId ? ' • ' : ''}{log.zoneName}
+							{/if}
+							{#if log.severity}
+								{(log.runId || log.zoneName) ? ' • ' : ''}{log.severity} severity
+							{/if}
+							{#if log.collectionVolumeKg !== null}
+								{(log.runId || log.zoneName || log.severity) ? ' • ' : ''}{log.collectionVolumeKg.toFixed(1)} kg
+							{/if}
+						</p>
+					</article>
+				{/each}
+			</div>
+		{/if}
+	</section>
 </div>

@@ -9,6 +9,7 @@ import {
 } from '$lib/server/db/schema';
 import { toYmdDate } from '$lib/server/services/date.service';
 import { refreshZoneForecasts } from '$lib/server/services/forecast.service';
+import { getDatasetHealth as getIntegratedDatasetHealth } from '$lib/server/services/intelligence.service';
 
 export type KpiSnapshot = {
 	date: string;
@@ -131,4 +132,8 @@ export async function getZoneDemand(date = toYmdDate()) {
 		.innerJoin(zone, eq(wasteForecast.zoneId, zone.id))
 		.where(eq(wasteForecast.forecastDate, date))
 		.orderBy(desc(wasteForecast.predictedVolumeKg));
+}
+
+export async function getDatasetHealth() {
+	return getIntegratedDatasetHealth();
 }

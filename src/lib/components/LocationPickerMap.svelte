@@ -93,6 +93,9 @@
 
 	$: if (map && latitude !== null && longitude !== null) {
 		setMarker(latitude, longitude);
+		map.setView([latitude, longitude], 15, {
+			animate: true
+		});
 	}
 </script>
 

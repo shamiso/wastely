@@ -2,6 +2,7 @@ import { eq, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { citizenReport, wasteForecast, zone } from '$lib/server/db/schema';
 import { toYmdDate } from '$lib/server/services/date.service';
+import { getZoneOperationalSignals } from '$lib/server/services/intelligence.service';
 
 export type ZoneDemand = {
 	zoneId: number;
@@ -26,14 +27,25 @@ export async function refreshZoneForecasts(forecastDate = toYmdDate()): Promise<
 		if (row.zoneId) openCountByZone.set(row.zoneId, Number(row.count));
 	}
 
+	const operationalSignals = await getZoneOperationalSignals();
+	const signalByZone = new Map(operationalSignals.map((signal) => [signal.zoneId, signal]));
+
 	const zones = await db.select().from(zone);
 	const forecasts: ZoneDemand[] = [];
 
 	for (const currentZone of zones) {
 		const openCount = openCountByZone.get(currentZone.id) ?? 0;
-		const predictedVolumeKg = Math.round(120 + openCount * 65);
-		const confidence = Math.min(0.95, 0.5 + openCount * 0.05);
-		const score = openCount * 10 + predictedVolumeKg / 50;
+		const signal = signalByZone.get(currentZone.id);
+		const historicalAverage = signal?.historicalAverageVolumeKg && signal.historicalAverageVolumeKg > 0
+			? signal.historicalAverageVolumeKg
+			: 120;
+		const operationalLoad = (signal?.roadRiskScore ?? 0) * 0.9 + (signal?.summaryIssueScore ?? 0) * 0.7;
+		const predictedVolumeKg = Math.round(historicalAverage * 0.65 + openCount * 60 + operationalLoad);
+		const confidence = Math.min(
+			0.97,
+			0.38 + Math.min(signal?.historicalSamples ?? 0, 10) * 0.04 + Math.min(openCount, 8) * 0.04
+		);
+		const score = openCount * 10 + predictedVolumeKg / 45 + operationalLoad / 12;
 
 		await db
 			.insert(wasteForecast)

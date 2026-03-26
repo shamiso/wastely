@@ -1,4 +1,5 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
+import { error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import {
 	citizenReport,
@@ -6,10 +7,12 @@ import {
 	routeRun,
 	routeStop,
 	userRole,
-	zone
+	zone,
+	user
 } from '$lib/server/db/schema';
 import { toYmdDate } from '$lib/server/services/date.service';
 import { refreshZoneForecasts } from '$lib/server/services/forecast.service';
+import { getZoneOperationalSignals } from '$lib/server/services/intelligence.service';
 import {
 	getOsrmTripDistanceKm,
 	haversineDistanceKm,
@@ -21,6 +24,26 @@ type RunGenerationInput = {
 	wardId?: number;
 };
 
+export type DispatchDriver = {
+	userId: string;
+	name: string;
+	email: string;
+	vehicleId: number | null;
+};
+
+export type DispatchRun = {
+	id: number;
+	runDate: string;
+	status: 'planned' | 'in_progress' | 'completed' | 'blocked';
+	driverUserId: string | null;
+	driverName: string | null;
+	plannedDistanceKm: number;
+	stopCount: number;
+	completedStopCount: number;
+	skippedStopCount: number;
+	createdAt: number;
+};
+
 function estimateDistance(points: Array<{ lat: number; lng: number }>): number {
 	if (points.length < 2) return 0;
 	let total = 0;
@@ -30,10 +53,54 @@ function estimateDistance(points: Array<{ lat: number; lng: number }>): number {
 	return Number(total.toFixed(2));
 }
 
+function orderByWeightedNearestNeighbor(
+	points: Array<{ id: number; lat: number; lng: number; zoneId: number | null }>,
+	zonePenaltyByZone: Map<number, number>
+) {
+	if (points.length <= 2) {
+		return orderByNearestNeighbor(points.map((point) => ({ id: point.id, lat: point.lat, lng: point.lng }))).map(
+			(point) => points.find((candidate) => candidate.id === point.id)!
+		);
+	}
+
+	const remaining = [...points];
+	const ordered = [remaining.shift() as (typeof points)[number]];
+
+	while (remaining.length > 0) {
+		const current = ordered[ordered.length - 1];
+		let candidateIndex = 0;
+		let candidateCost = Number.POSITIVE_INFINITY;
+
+		for (let i = 0; i < remaining.length; i += 1) {
+			const candidate = remaining[i];
+			const distance = haversineDistanceKm(current, candidate);
+			const zonePenalty =
+				candidate.zoneId === null ? 0 : (zonePenaltyByZone.get(candidate.zoneId) ?? 0) / 120;
+			const weightedCost = distance * (1 + zonePenalty);
+
+			if (weightedCost < candidateCost) {
+				candidateCost = weightedCost;
+				candidateIndex = i;
+			}
+		}
+
+		ordered.push(remaining.splice(candidateIndex, 1)[0]);
+	}
+
+	return ordered;
+}
+
 export async function generateDailyRuns(input: RunGenerationInput = {}) {
 	const runDate = input.runDate ?? toYmdDate();
 	const demand = await refreshZoneForecasts(runDate);
 	const demandScoreByZone = new Map(demand.map((item) => [item.zoneId, item.score]));
+	const operationalSignals = await getZoneOperationalSignals();
+	const zonePenaltyByZone = new Map(
+		operationalSignals.map((signal) => [
+			signal.zoneId,
+			Number((signal.roadRiskScore + signal.summaryIssueScore).toFixed(2))
+		])
+	);
 
 	const openReportRows = await db
 		.select({
@@ -98,13 +165,14 @@ export async function generateDailyRuns(input: RunGenerationInput = {}) {
 			})
 			.returning();
 
-		const ordered = orderByNearestNeighbor(
+		const ordered = orderByWeightedNearestNeighbor(
 			batch.map((row) => ({
 				id: row.report.id,
 				lat: row.report.latitude,
-				lng: row.report.longitude
+				lng: row.report.longitude,
+				zoneId: row.report.zoneId
 			}))
-		);
+		, zonePenaltyByZone);
 
 		const reportById = new Map(batch.map((row) => [row.report.id, row.report]));
 		const stops = ordered.map((point, index) => {
@@ -167,4 +235,112 @@ export async function generateDailyRuns(input: RunGenerationInput = {}) {
 		runsCreated,
 		stopsCreated
 	};
+}
+
+export async function listDispatchDrivers(): Promise<DispatchDriver[]> {
+	const rows = await db
+		.select({
+			userId: driverProfile.userId,
+			name: user.name,
+			email: user.email,
+			vehicleId: driverProfile.vehicleId
+		})
+		.from(driverProfile)
+		.innerJoin(userRole, eq(driverProfile.userId, userRole.userId))
+		.innerJoin(user, eq(driverProfile.userId, user.id))
+		.where(and(eq(driverProfile.active, true), eq(userRole.role, 'driver')));
+
+	return rows.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function listDispatchRuns(runDate = toYmdDate()): Promise<DispatchRun[]> {
+	const runRows = await db
+		.select({
+			id: routeRun.id,
+			runDate: routeRun.runDate,
+			status: routeRun.status,
+			driverUserId: routeRun.driverUserId,
+			driverName: user.name,
+			plannedDistanceKm: routeRun.plannedDistanceKm,
+			createdAt: routeRun.createdAt
+		})
+		.from(routeRun)
+		.leftJoin(user, eq(routeRun.driverUserId, user.id))
+		.where(eq(routeRun.runDate, runDate));
+
+	if (runRows.length === 0) return [];
+
+	const runIds = runRows.map((run) => run.id);
+	const stopRows = await db
+		.select({
+			routeRunId: routeStop.routeRunId,
+			status: routeStop.status
+		})
+		.from(routeStop)
+		.where(inArray(routeStop.routeRunId, runIds));
+
+	const stopStatsByRun = new Map<number, { total: number; completed: number; skipped: number }>();
+
+	for (const stop of stopRows) {
+		const current = stopStatsByRun.get(stop.routeRunId) ?? {
+			total: 0,
+			completed: 0,
+			skipped: 0
+		};
+		current.total += 1;
+		if (stop.status === 'done') current.completed += 1;
+		if (stop.status === 'skipped') current.skipped += 1;
+		stopStatsByRun.set(stop.routeRunId, current);
+	}
+
+	return runRows
+		.map((run) => {
+			const stopStats = stopStatsByRun.get(run.id) ?? {
+				total: 0,
+				completed: 0,
+				skipped: 0
+			};
+
+			return {
+				id: run.id,
+				runDate: run.runDate,
+				status: run.status,
+				driverUserId: run.driverUserId,
+				driverName: run.driverName ?? null,
+				plannedDistanceKm: run.plannedDistanceKm,
+				stopCount: stopStats.total,
+				completedStopCount: stopStats.completed,
+				skippedStopCount: stopStats.skipped,
+				createdAt: run.createdAt
+			} as DispatchRun;
+		})
+		.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export async function assignDispatchRun(input: { runId: number; driverUserId: string | null }) {
+	const [run] = await db.select().from(routeRun).where(eq(routeRun.id, input.runId)).limit(1);
+	if (!run) throw error(404, 'Route run not found');
+	if (run.status !== 'planned') throw error(400, 'Only planned runs can be reassigned.');
+
+	if (input.driverUserId) {
+		const [driver] = await db
+			.select({ userId: driverProfile.userId })
+			.from(driverProfile)
+			.innerJoin(userRole, eq(driverProfile.userId, userRole.userId))
+			.where(and(eq(driverProfile.userId, input.driverUserId), eq(driverProfile.active, true), eq(userRole.role, 'driver')))
+			.limit(1);
+
+		if (!driver) throw error(400, 'Selected driver is not available.');
+	}
+
+	const [updated] = await db
+		.update(routeRun)
+		.set({
+			driverUserId: input.driverUserId,
+			updatedAt: Date.now()
+		})
+		.where(eq(routeRun.id, input.runId))
+		.returning();
+
+	return updated;
 }

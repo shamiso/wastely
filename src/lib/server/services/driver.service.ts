@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ne } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import { error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import {
@@ -11,20 +11,32 @@ import { toYmdDate } from '$lib/server/services/date.service';
 
 const stopStatuses = ['pending', 'done', 'skipped'] as const;
 type StopStatus = (typeof stopStatuses)[number];
+type RunSummaryPayload = {
+	collectionVolumeKg?: number;
+	issues?: string;
+	delays?: string;
+	roadConditions?: string;
+	missedPickups?: number;
+};
+
+function parseRunSummary(payloadJson: string | null): RunSummaryPayload | null {
+	if (!payloadJson) return null;
+
+	try {
+		return JSON.parse(payloadJson) as RunSummaryPayload;
+	} catch {
+		return null;
+	}
+}
 
 export async function getAssignedRun(driverUserId: string, runDate = toYmdDate()) {
-	const [run] = await db
+	const runs = await db
 		.select()
 		.from(routeRun)
-		.where(
-			and(
-				eq(routeRun.driverUserId, driverUserId),
-				eq(routeRun.runDate, runDate),
-				ne(routeRun.status, 'completed')
-			)
-		)
-		.orderBy(desc(routeRun.createdAt))
-		.limit(1);
+		.where(and(eq(routeRun.driverUserId, driverUserId), eq(routeRun.runDate, runDate)))
+		.orderBy(desc(routeRun.createdAt));
+
+	const run = runs.find((candidate) => candidate.status !== 'completed') ?? runs[0];
 
 	if (!run) return null;
 
@@ -34,7 +46,59 @@ export async function getAssignedRun(driverUserId: string, runDate = toYmdDate()
 		.where(eq(routeStop.routeRunId, run.id))
 		.orderBy(asc(routeStop.sequence));
 
-	return { run, stops };
+	const [summaryRow] = await db
+		.select({
+			id: driverEventLog.id,
+			createdAt: driverEventLog.createdAt,
+			payloadJson: driverEventLog.payloadJson
+		})
+		.from(driverEventLog)
+		.where(and(eq(driverEventLog.routeRunId, run.id), eq(driverEventLog.eventType, 'run_summary')))
+		.orderBy(desc(driverEventLog.createdAt))
+		.limit(1);
+
+	return {
+		run,
+		stops,
+		summary: summaryRow
+			? {
+					id: summaryRow.id,
+					createdAt: summaryRow.createdAt,
+					...(parseRunSummary(summaryRow.payloadJson) ?? {})
+				}
+			: null
+	};
+}
+
+export async function startAssignedRun(driverUserId: string, runId: number) {
+	const [run] = await db.select().from(routeRun).where(eq(routeRun.id, runId)).limit(1);
+	if (!run) throw error(404, 'Route run not found');
+	if (run.driverUserId && run.driverUserId !== driverUserId) {
+		throw error(403, 'You are not assigned to this run.');
+	}
+	if (run.status !== 'planned') return run;
+
+	const timestamp = Date.now();
+	const [updated] = await db
+		.update(routeRun)
+		.set({
+			status: 'in_progress',
+			startedAt: run.startedAt ?? timestamp,
+			updatedAt: timestamp
+		})
+		.where(eq(routeRun.id, runId))
+		.returning();
+
+	await db.insert(driverEventLog).values({
+		routeRunId: runId,
+		driverUserId,
+		eventType: 'run_started',
+		payloadJson: JSON.stringify({
+			startedAt: timestamp
+		})
+	});
+
+	return updated;
 }
 
 export async function submitStopUpdate(input: {
@@ -143,4 +207,65 @@ export async function submitRoadConditionIssue(input: {
 	});
 
 	return created;
+}
+
+export async function submitRunSummary(input: {
+	driverUserId: string;
+	runId: number;
+	collectionVolumeKg?: number;
+	issues?: string;
+	delays?: string;
+	roadConditions?: string;
+	missedPickups?: number;
+}) {
+	const [run] = await db.select().from(routeRun).where(eq(routeRun.id, input.runId)).limit(1);
+	if (!run) throw error(404, 'Route run not found');
+	if (run.driverUserId && run.driverUserId !== input.driverUserId) {
+		throw error(403, 'You are not assigned to this run.');
+	}
+
+	const pendingStops = await db
+		.select({ id: routeStop.id })
+		.from(routeStop)
+		.where(and(eq(routeStop.routeRunId, input.runId), eq(routeStop.status, 'pending')))
+		.limit(1);
+
+	if (pendingStops.length > 0) {
+		throw error(400, 'Complete the assigned route before submitting a run summary.');
+	}
+
+	if (run.status !== 'completed') {
+		await db
+			.update(routeRun)
+			.set({
+				status: 'completed',
+				completedAt: run.completedAt ?? Date.now(),
+				updatedAt: Date.now()
+			})
+			.where(eq(routeRun.id, input.runId));
+	}
+
+	const payload = {
+		collectionVolumeKg: input.collectionVolumeKg ?? 0,
+		issues: input.issues?.trim() || '',
+		delays: input.delays?.trim() || '',
+		roadConditions: input.roadConditions?.trim() || '',
+		missedPickups: input.missedPickups ?? 0
+	};
+
+	const [created] = await db
+		.insert(driverEventLog)
+		.values({
+			routeRunId: input.runId,
+			driverUserId: input.driverUserId,
+			eventType: 'run_summary',
+			payloadJson: JSON.stringify(payload)
+		})
+		.returning();
+
+	return {
+		id: created.id,
+		createdAt: created.createdAt,
+		...payload
+	};
 }

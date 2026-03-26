@@ -1,6 +1,6 @@
 import { command, form, getRequestEvent, query } from '$app/server';
 import { error } from '@sveltejs/kit';
-import { requireUser } from '$lib/server/services/authz.service';
+import { requireExactRole } from '$lib/server/services/authz.service';
 import {
 	createCitizenReport,
 	deleteCitizenReport,
@@ -38,7 +38,7 @@ export const createReport = form(
 		photoPublicUrl?: string;
 	}) => {
 		const event = getRequestEvent();
-		const user = requireUser(event);
+		const user = requireExactRole(event, 'citizen');
 
 		const report = await createCitizenReport({
 			reporterUserId: user.id,
@@ -72,13 +72,13 @@ export const createReport = form(
 
 export const listMyReports = query(async () => {
 	const event = getRequestEvent();
-	const user = requireUser(event);
+	const user = requireExactRole(event, 'citizen');
 	return listReportsByUser(user.id);
 });
 
 export const reportDetail = query('unchecked', async (input: { reportId: number }) => {
 	const event = getRequestEvent();
-	const user = requireUser(event);
+	const user = requireExactRole(event, 'citizen');
 
 	const report = await getReportById(Number(input.reportId));
 	if (!report) throw error(404, 'Report not found');
@@ -93,7 +93,7 @@ export const updateMyReport = command(
 	'unchecked',
 	async (input: { reportId: number | string; category?: string; description?: string }) => {
 		const event = getRequestEvent();
-		const user = requireUser(event);
+		const user = requireExactRole(event, 'citizen');
 		const reportId = Number(input.reportId);
 		const report = await getReportById(reportId);
 
@@ -115,7 +115,7 @@ export const updateMyReport = command(
 
 export const deleteMyReport = command('unchecked', async (input: { reportId: number | string }) => {
 	const event = getRequestEvent();
-	const user = requireUser(event);
+	const user = requireExactRole(event, 'citizen');
 	const reportId = Number(input.reportId);
 	const report = await getReportById(reportId);
 
