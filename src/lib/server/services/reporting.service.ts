@@ -3,7 +3,7 @@ import { error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { citizenReport, reportPhoto, zone } from '$lib/server/db/schema';
 import { resolveZoneFromCoordinates } from '$lib/server/services/geo.service';
-import { uploadReportPhoto } from '$lib/server/services/storage.service';
+import { buildPublicUrl, uploadReportPhoto } from '$lib/server/services/storage.service';
 
 const reportCategories = ['uncollected', 'illegal_dumping', 'overflowing_bin', 'other'] as const;
 const reportStatuses = ['open', 'in_review', 'resolved', 'rejected'] as const;
@@ -62,7 +62,7 @@ function toReportWithPhoto(row: {
 		zoneName: row.zone?.name ?? null,
 		createdAt: row.report.createdAt,
 		updatedAt: row.report.updatedAt,
-		photoUrl: row.photo?.publicUrl ?? null
+		photoUrl: row.photo ? buildPublicUrl(row.photo.objectKey) : null
 	};
 }
 

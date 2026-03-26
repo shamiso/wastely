@@ -5,6 +5,7 @@ import { error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 
 const MAX_REPORT_PHOTO_SIZE = 10 * 1024 * 1024;
+const defaultPublicBaseUrl = 'https://cdn.sey.so';
 
 function readRequiredEnv(name: keyof typeof env): string {
 	const value = env[name];
@@ -58,13 +59,9 @@ function buildObjectKey(userId: string, contentType: string): string {
 }
 
 export function buildPublicUrl(objectKey: string): string {
-	if (env.S3_PUBLIC_BASE_URL) {
-		const base = env.S3_PUBLIC_BASE_URL.replace(/\/+$/, '');
-		return `${base}/${objectKey}`;
-	}
-
-	const endpoint = readRequiredEnv('S3_ENDPOINT').replace(/\/+$/, '');
-	return `${endpoint}/${getBucket()}/${objectKey}`;
+	const base = (env.S3_PUBLIC_BASE_URL ?? defaultPublicBaseUrl).replace(/\/+$/, '');
+	const normalizedObjectKey = objectKey.replace(/^\/+/, '');
+	return `${base}/${normalizedObjectKey}`;
 }
 
 export async function uploadReportPhoto(file: File, userId: string) {
