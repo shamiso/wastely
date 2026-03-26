@@ -2,7 +2,11 @@ import type { Handle } from '@sveltejs/kit';
 import { building } from '$app/environment';
 import { auth } from '$lib/server/auth';
 import { svelteKitHandler } from 'better-auth/svelte-kit';
-import { ensureUserRole } from '$lib/server/services/authz.service';
+import {
+	ensureUserRole,
+	requestedPortalCookieName,
+	syncUserRoleForPortal
+} from '$lib/server/services/authz.service';
 
 const handleBetterAuth: Handle = async ({ event, resolve }) => {
 	const session = await auth.api.getSession({ headers: event.request.headers });
@@ -11,7 +15,15 @@ const handleBetterAuth: Handle = async ({ event, resolve }) => {
 		event.locals.session = session.session;
 		event.locals.user = session.user;
 		try {
-			event.locals.role = await ensureUserRole(session.user.id);
+			const requestedPortal = event.cookies.get(requestedPortalCookieName);
+			if (requestedPortal === 'citizen' || requestedPortal === 'driver' || requestedPortal === 'admin') {
+				event.locals.role = await syncUserRoleForPortal(session.user.id, requestedPortal);
+				event.cookies.delete(requestedPortalCookieName, {
+					path: '/'
+				});
+			} else {
+				event.locals.role = await ensureUserRole(session.user.id);
+			}
 		} catch (err) {
 			console.error('Failed to ensure user role', err);
 		}

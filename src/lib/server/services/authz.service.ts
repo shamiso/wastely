@@ -1,12 +1,12 @@
 import type { RequestEvent } from '@sveltejs/kit';
 import { error, redirect } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
-import { env } from '$env/dynamic/private';
-import { dev } from '$app/environment';
 import { db } from '$lib/server/db';
 import { driverProfile, userRole } from '$lib/server/db/schema';
 
 export type AppRole = 'citizen' | 'driver' | 'admin';
+export const requestedPortalCookieName = 'wastely_requested_role';
+const authzBypassEnabled = true;
 
 const roleRank: Record<AppRole, number> = {
 	citizen: 0,
@@ -14,25 +14,14 @@ const roleRank: Record<AppRole, number> = {
 	admin: 2
 };
 
-function isAuthzBypassEnabled(): boolean {
-	const raw = env.AUTHZ_BYPASS?.toLowerCase();
-	if (raw) return ['1', 'true', 'yes', 'on'].includes(raw);
-	return dev;
-}
-
-function isExplicitAuthzBypassEnabled(): boolean {
-	const raw = env.AUTHZ_BYPASS?.toLowerCase();
-	return raw ? ['1', 'true', 'yes', 'on'].includes(raw) : false;
-}
-
 export function hasMinimumRole(currentRole: AppRole | null | undefined, requiredRole: AppRole): boolean {
-	if (isAuthzBypassEnabled()) return true;
+	if (authzBypassEnabled) return true;
 	if (!currentRole) return false;
 	return roleRank[currentRole] >= roleRank[requiredRole];
 }
 
 export function hasExactRole(currentRole: AppRole | null | undefined, requiredRole: AppRole): boolean {
-	if (isExplicitAuthzBypassEnabled()) return true;
+	if (authzBypassEnabled) return true;
 	return currentRole === requiredRole;
 }
 
@@ -70,18 +59,7 @@ export async function ensureUserRole(userId: string): Promise<AppRole> {
 	return 'citizen';
 }
 
-export async function syncUserRoleForPortal(userId: string, requestedRole: AppRole): Promise<AppRole> {
-	const existing = await getUserRole(userId);
-
-	if (requestedRole === 'admin') {
-		return existing ?? ensureUserRole(userId);
-	}
-
-	if (existing === 'admin') {
-		return 'admin';
-	}
-
-	const role = requestedRole;
+async function setUserRole(userId: string, role: AppRole): Promise<void> {
 	const timestamp = Date.now();
 
 	await db
@@ -108,8 +86,11 @@ export async function syncUserRoleForPortal(userId: string, requestedRole: AppRo
 			})
 			.onConflictDoNothing();
 	}
+}
 
-	return role;
+export async function syncUserRoleForPortal(userId: string, requestedRole: AppRole): Promise<AppRole> {
+	await setUserRole(userId, requestedRole);
+	return requestedRole;
 }
 
 export function requireUser(event: RequestEvent) {

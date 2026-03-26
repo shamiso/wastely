@@ -18,7 +18,6 @@ Copy `.env.example` to `.env` and fill all required values:
 - `TURSO_AUTH_TOKEN`
 - `BETTER_AUTH_SECRET`
 - `ORIGIN`
-- `AUTHZ_BYPASS` (`true` for local demo access across driver/admin pages)
 - `S3_ACCESS_KEY_ID`
 - `S3_SECRET_ACCESS_KEY`
 - `S3_BUCKET`
@@ -45,9 +44,11 @@ pnpm dev
 
 ## Roles
 
-Users are auto-provisioned as `citizen` on first login.
+Users can sign in as `citizen` or `driver` from the portal selector.
 
-To promote a user:
+Municipal officer access is currently bypassed in code for demo mode.
+
+You can still promote a user manually if needed:
 
 ```sql
 update user_role set role = 'driver' where user_id = '<USER_ID>';

@@ -3,6 +3,7 @@ import type { Actions, PageServerLoad } from './$types';
 import { APIError } from 'better-auth';
 import { auth } from '$lib/server/auth';
 import {
+	requestedPortalCookieName,
 	resolveHomePath,
 	syncUserRoleForPortal,
 	toAppRole
@@ -20,6 +21,13 @@ export const actions: Actions = {
 		const password = formData.get('password')?.toString() ?? '';
 		const requestedRole = toAppRole(formData.get('role')?.toString());
 		let actualRole = requestedRole;
+
+		event.cookies.set(requestedPortalCookieName, requestedRole, {
+			path: '/',
+			httpOnly: true,
+			sameSite: 'lax',
+			maxAge: 60
+		});
 
 		try {
 			const session = await auth.api.signInEmail({
@@ -45,6 +53,13 @@ export const actions: Actions = {
 		const name = formData.get('name')?.toString() ?? '';
 		const requestedRole = toAppRole(formData.get('role')?.toString());
 		let actualRole = requestedRole;
+
+		event.cookies.set(requestedPortalCookieName, requestedRole, {
+			path: '/',
+			httpOnly: true,
+			sameSite: 'lax',
+			maxAge: 60
+		});
 
 		try {
 			const registration = await auth.api.signUpEmail({
