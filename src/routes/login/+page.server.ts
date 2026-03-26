@@ -2,7 +2,11 @@ import { fail, redirect } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import { APIError } from 'better-auth';
 import { auth } from '$lib/server/auth';
-import { ensureUserRole, resolveHomePath, toAppRole } from '$lib/server/services/authz.service';
+import {
+	resolveHomePath,
+	syncUserRoleForPortal,
+	toAppRole
+} from '$lib/server/services/authz.service';
 
 export const load: PageServerLoad = async (event) => {
 	if (event.locals.user) throw redirect(302, '/');
@@ -26,7 +30,7 @@ export const actions: Actions = {
 				}
 			});
 
-			actualRole = await ensureUserRole(session.user.id);
+			actualRole = await syncUserRoleForPortal(session.user.id, requestedRole);
 		} catch (err) {
 			if (err instanceof APIError) return fail(400, { message: err.message || 'Sign in failed' });
 			return fail(500, { message: 'Unexpected error during sign in' });
@@ -39,6 +43,8 @@ export const actions: Actions = {
 		const email = formData.get('email')?.toString() ?? '';
 		const password = formData.get('password')?.toString() ?? '';
 		const name = formData.get('name')?.toString() ?? '';
+		const requestedRole = toAppRole(formData.get('role')?.toString());
+		let actualRole = requestedRole;
 
 		try {
 			const registration = await auth.api.signUpEmail({
@@ -50,12 +56,12 @@ export const actions: Actions = {
 				}
 			});
 
-			await ensureUserRole(registration.user.id);
+			actualRole = await syncUserRoleForPortal(registration.user.id, requestedRole);
 		} catch (err) {
 			if (err instanceof APIError) return fail(400, { message: err.message || 'Registration failed' });
 			return fail(500, { message: 'Unexpected error during registration' });
 		}
 
-		throw redirect(302, '/citizen/report');
+		throw redirect(302, resolveHomePath(actualRole));
 	}
 };

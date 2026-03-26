@@ -152,7 +152,9 @@ async function getRemoteAddressMatches(query: string): Promise<AddressSuggestion
 		const response = await fetch(url, {
 			headers: {
 				accept: 'application/json',
-				'accept-language': 'en'
+				'accept-language': 'en',
+				'user-agent': 'Wastely/0.0.1 (geocoding-service)',
+				referer: env.ORIGIN || 'https://wastely.local/'
 			}
 		});
 

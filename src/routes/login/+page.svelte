@@ -53,9 +53,7 @@
 			</label>
 		</div>
 
-		<p class="text-xs text-slate-500">
-			New registrations are created with citizen access by default.
-		</p>
+		<p class="text-xs text-slate-500">Municipal Officer access still requires an authorized admin account.</p>
 
 		<div class="flex flex-wrap gap-2">
 			<button

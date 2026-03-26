@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import { env } from '$env/dynamic/private';
 import { dev } from '$app/environment';
 import { db } from '$lib/server/db';
-import { userRole } from '$lib/server/db/schema';
+import { driverProfile, userRole } from '$lib/server/db/schema';
 
 export type AppRole = 'citizen' | 'driver' | 'admin';
 
@@ -68,6 +68,48 @@ export async function ensureUserRole(userId: string): Promise<AppRole> {
 	});
 
 	return 'citizen';
+}
+
+export async function syncUserRoleForPortal(userId: string, requestedRole: AppRole): Promise<AppRole> {
+	const existing = await getUserRole(userId);
+
+	if (requestedRole === 'admin') {
+		return existing ?? ensureUserRole(userId);
+	}
+
+	if (existing === 'admin') {
+		return 'admin';
+	}
+
+	const role = requestedRole;
+	const timestamp = Date.now();
+
+	await db
+		.insert(userRole)
+		.values({
+			userId,
+			role,
+			updatedAt: timestamp
+		})
+		.onConflictDoUpdate({
+			target: userRole.userId,
+			set: {
+				role,
+				updatedAt: timestamp
+			}
+		});
+
+	if (role === 'driver') {
+		await db
+			.insert(driverProfile)
+			.values({
+				userId,
+				updatedAt: timestamp
+			})
+			.onConflictDoNothing();
+	}
+
+	return role;
 }
 
 export function requireUser(event: RequestEvent) {
