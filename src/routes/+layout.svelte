@@ -1,50 +1,121 @@
 <script lang="ts">
-	import './layout.css';
+	import { browser } from '$app/environment';
+	import { page } from '$app/state';
 	import favicon from '$lib/assets/favicon.svg';
+	import AppBottomNav from '$lib/components/AppBottomNav.svelte';
+	import InstallPrompt from '$lib/components/InstallPrompt.svelte';
+	import { onMount } from 'svelte';
 	import type { LayoutData } from './$types';
+	import './layout.css';
 
 	let { children, data }: { children: import('svelte').Snippet; data: LayoutData } = $props();
+
+	const adminLinks = [
+		{ href: '/admin/dashboard', label: 'Dashboard' },
+		{ href: '/admin/dispatch', label: 'Dispatch' },
+		{ href: '/admin/reports', label: 'Citizen Reports' },
+		{ href: '/admin/driver-reports', label: 'Driver Reports' }
+	];
+
+	const citizenNav = [
+		{ href: '/citizen/report', label: 'Report', icon: 'report' as const },
+		{ href: '/citizen/reports', label: 'My Reports', icon: 'list' as const }
+	];
+
+	const driverNav = [
+		{ href: '/driver/run', label: 'Dashboard', icon: 'route' as const },
+		{ href: '/driver/reports', label: 'Reports', icon: 'alert' as const }
+	];
+
+	onMount(() => {
+		if (!browser || !('serviceWorker' in navigator)) return;
+		void navigator.serviceWorker.register('/service-worker.js');
+	});
 </script>
 
-<svelte:head><link rel="icon" href={favicon} /></svelte:head>
+<svelte:head>
+	<link rel="icon" href={favicon} />
+	<link rel="manifest" href="/manifest.webmanifest" />
+	<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+	<meta name="theme-color" content="#0f766e" />
+	<meta name="apple-mobile-web-app-capable" content="yes" />
+	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+	<meta name="apple-mobile-web-app-title" content="Wastely" />
+</svelte:head>
 
-<div class="min-h-screen bg-slate-50 text-slate-900">
-	<header class="border-b border-slate-200 bg-white/90 backdrop-blur">
-		<div class="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
-			<div class="flex items-center gap-3">
-				<a href="/" class="text-lg font-semibold tracking-tight">Wastely</a>
-				{#if data.role}
-					<span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium uppercase tracking-wide text-slate-700">
-						{data.role}
-					</span>
-				{/if}
+{#if data.role === 'admin'}
+	<div class="admin-shell">
+		<div class="admin-backdrop"></div>
+		<header class="admin-header">
+			<div class="admin-header-inner">
+				<div class="brand-block">
+					<a href="/" class="brand-mark">W</a>
+					<div>
+						<p class="brand-name">Wastely Command</p>
+						<p class="brand-subtitle">Municipal operations and field intelligence</p>
+					</div>
+				</div>
+
+				<div class="admin-actions">
+					<InstallPrompt />
+					{#if data.user}
+						<form method="post" action="/logout">
+							<button type="submit" class="header-button primary">Sign out</button>
+						</form>
+					{:else}
+						<a href="/login" class="header-button primary">Sign in</a>
+					{/if}
+				</div>
 			</div>
 
-			<nav class="flex items-center gap-2 text-sm">
-				{#if data.user}
-					{#if data.role === 'citizen'}
-						<a href="/citizen/report" class="rounded px-3 py-1.5 hover:bg-slate-100">Report Issue</a>
-						<a href="/citizen/reports" class="rounded px-3 py-1.5 hover:bg-slate-100">My Reports</a>
-					{:else if data.role === 'driver'}
-						<a href="/driver/run" class="rounded px-3 py-1.5 hover:bg-slate-100">Driver Run</a>
-					{:else if data.role === 'admin'}
-						<a href="/admin/dashboard" class="rounded px-3 py-1.5 hover:bg-slate-100">Dashboard</a>
-						<a href="/admin/dispatch" class="rounded px-3 py-1.5 hover:bg-slate-100">Dispatch</a>
-						<a href="/admin/reports" class="rounded px-3 py-1.5 hover:bg-slate-100">All Reports</a>
-					{/if}
-					<form method="post" action="/logout">
-						<button type="submit" class="rounded bg-slate-900 px-3 py-1.5 font-medium text-white">
-							Sign out
-						</button>
-					</form>
-				{:else}
-					<a href="/login" class="rounded bg-slate-900 px-3 py-1.5 font-medium text-white">Sign in</a>
-				{/if}
+			<nav class="admin-nav">
+				{#each adminLinks as link}
+					<a href={link.href} class:active={page.url.pathname === link.href || page.url.pathname.startsWith(`${link.href}/`)}>
+						{link.label}
+					</a>
+				{/each}
 			</nav>
-		</div>
-	</header>
+		</header>
 
-	<main class="mx-auto max-w-6xl px-4 py-6">
-		{@render children()}
-	</main>
-</div>
+		<main class="admin-main">
+			{@render children()}
+		</main>
+	</div>
+{:else if data.role === 'citizen' || data.role === 'driver'}
+	<div class="app-shell">
+		<div class="app-backdrop"></div>
+		<header class="app-header">
+			<div>
+				<p class="app-eyebrow">{data.role === 'citizen' ? 'Citizen App' : 'Driver App'}</p>
+				<h1 class="app-title">Wastely</h1>
+			</div>
+
+			<div class="app-header-actions">
+				<InstallPrompt />
+				<form method="post" action="/logout">
+					<button type="submit" class="header-button ghost">Exit</button>
+				</form>
+			</div>
+		</header>
+
+		<main class="app-main">
+			{@render children()}
+		</main>
+
+		<AppBottomNav pathname={page.url.pathname} items={data.role === 'citizen' ? citizenNav : driverNav} />
+	</div>
+{:else}
+	<div class="public-shell">
+		<header class="public-header">
+			<a href="/" class="public-brand">Wastely</a>
+			<div class="admin-actions">
+				<InstallPrompt />
+				<a href="/login" class="header-button primary">Sign in</a>
+			</div>
+		</header>
+
+		<main class="public-main">
+			{@render children()}
+		</main>
+	</div>
+{/if}

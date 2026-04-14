@@ -2,6 +2,7 @@ import { command, getRequestEvent, query } from '$app/server';
 import { requireExactRole } from '$lib/server/services/authz.service';
 import {
 	getAssignedRun,
+	listDriverRouteHistory,
 	startAssignedRun,
 	submitRoadConditionIssue,
 	submitRunSummary,
@@ -20,6 +21,12 @@ export const getCurrentRun = query(async () => {
 	const event = getRequestEvent();
 	const user = requireExactRole(event, 'driver');
 	return getAssignedRun(user.id);
+});
+
+export const getDriverHistory = query('unchecked', async (input: { limit?: number } = {}) => {
+	const event = getRequestEvent();
+	const user = requireExactRole(event, 'driver');
+	return listDriverRouteHistory(user.id, input.limit ?? 8);
 });
 
 export const startRun = command('unchecked', async (input: { runId: number | string }) => {
@@ -54,10 +61,19 @@ export const submitRoadIssue = command(
 	async (input: {
 		runId?: number | string;
 		zoneId?: number | string;
+		issueType?: string;
 		severity?: 'low' | 'medium' | 'high';
+		trafficLevel?: string;
 		description: string;
+		startLabel?: string;
+		endLabel?: string;
+		startLatitude?: number | string;
+		startLongitude?: number | string;
+		endLatitude?: number | string;
+		endLongitude?: number | string;
 		latitude?: number | string;
 		longitude?: number | string;
+		estimatedDelayMinutes?: number | string;
 	}) => {
 		const event = getRequestEvent();
 		const user = requireExactRole(event, 'driver');
@@ -69,10 +85,19 @@ export const submitRoadIssue = command(
 			driverUserId: user.id,
 			runId: toOptionalNumber(input.runId),
 			zoneId: toOptionalNumber(input.zoneId),
+			issueType: input.issueType,
 			severity,
+			trafficLevel: input.trafficLevel,
 			description: input.description,
+			startLabel: input.startLabel,
+			endLabel: input.endLabel,
+			startLatitude: toOptionalNumber(input.startLatitude),
+			startLongitude: toOptionalNumber(input.startLongitude),
+			endLatitude: toOptionalNumber(input.endLatitude),
+			endLongitude: toOptionalNumber(input.endLongitude),
 			latitude: toOptionalNumber(input.latitude),
-			longitude: toOptionalNumber(input.longitude)
+			longitude: toOptionalNumber(input.longitude),
+			estimatedDelayMinutes: toOptionalNumber(input.estimatedDelayMinutes)
 		});
 	}
 );

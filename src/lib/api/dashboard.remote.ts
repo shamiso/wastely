@@ -1,6 +1,7 @@
 import { getRequestEvent, query } from '$app/server';
 import { requireExactRole } from '$lib/server/services/authz.service';
 import {
+	getCitizenReportMap,
 	getDatasetHealth,
 	getKpiSnapshot,
 	getZoneDemand
@@ -22,4 +23,10 @@ export const datasetHealth = query(async () => {
 	const event = getRequestEvent();
 	requireExactRole(event, 'admin');
 	return getDatasetHealth();
+});
+
+export const citizenReportMap = query(async () => {
+	const event = getRequestEvent();
+	requireExactRole(event, 'admin');
+	return getCitizenReportMap();
 });

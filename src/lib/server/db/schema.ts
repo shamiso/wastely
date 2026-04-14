@@ -126,15 +126,36 @@ export const roadConditionReport = sqliteTable(
 	{
 		id: integer('id').primaryKey({ autoIncrement: true }),
 		reporterUserId: text('reporter_user_id').notNull(),
+		routeRunId: integer('route_run_id').references(() => routeRun.id, { onDelete: 'set null' }),
 		zoneId: integer('zone_id').references(() => zone.id, { onDelete: 'set null' }),
+		issueType: text('issue_type', {
+			enum: ['congestion', 'pothole', 'flooding', 'closure', 'surface_damage', 'accident', 'other']
+		})
+			.notNull()
+			.default('other'),
 		severity: text('severity', { enum: ['low', 'medium', 'high'] }).notNull().default('medium'),
+		trafficLevel: text('traffic_level', {
+			enum: ['light', 'moderate', 'heavy', 'standstill']
+		})
+			.notNull()
+			.default('moderate'),
 		description: text('description').notNull(),
+		startLabel: text('start_label'),
+		endLabel: text('end_label'),
+		startLatitude: real('start_latitude'),
+		startLongitude: real('start_longitude'),
+		endLatitude: real('end_latitude'),
+		endLongitude: real('end_longitude'),
 		latitude: real('latitude'),
 		longitude: real('longitude'),
-		createdAt: integer('created_at').notNull().$defaultFn(now)
+		estimatedDelayMinutes: real('estimated_delay_minutes').notNull().default(0),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now)
 	},
 	(table) => ({
-		zoneIdx: index('road_condition_zone_idx').on(table.zoneId)
+		zoneIdx: index('road_condition_zone_idx').on(table.zoneId),
+		routeIdx: index('road_condition_route_idx').on(table.routeRunId),
+		issueTypeIdx: index('road_condition_issue_type_idx').on(table.issueType)
 	})
 );
 
@@ -149,7 +170,14 @@ export const routeRun = sqliteTable(
 		status: text('status', { enum: ['planned', 'in_progress', 'completed', 'blocked'] })
 			.notNull()
 			.default('planned'),
+		originLatitude: real('origin_latitude'),
+		originLongitude: real('origin_longitude'),
+		destinationLatitude: real('destination_latitude'),
+		destinationLongitude: real('destination_longitude'),
 		plannedDistanceKm: real('planned_distance_km').notNull().default(0),
+		estimatedDurationMinutes: real('estimated_duration_minutes').notNull().default(0),
+		routeGeometryJson: text('route_geometry_json'),
+		optimizerMetadataJson: text('optimizer_metadata_json'),
 		startedAt: integer('started_at'),
 		completedAt: integer('completed_at'),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
@@ -215,6 +243,8 @@ export const wasteForecast = sqliteTable(
 		forecastDate: text('forecast_date').notNull(),
 		predictedVolumeKg: real('predicted_volume_kg').notNull().default(0),
 		confidence: real('confidence').notNull().default(0),
+		modelSource: text('model_source').notNull().default('heuristic'),
+		modelVersion: text('model_version').notNull().default('heuristic-v2'),
 		createdAt: integer('created_at').notNull().$defaultFn(now)
 	},
 	(table) => ({

@@ -1,15 +1,13 @@
 <script lang="ts">
+	import InsightMap from '$lib/components/InsightMap.svelte';
 	import {
 		getCurrentRun,
 		startRun,
-		submitRoadIssue,
 		submitRunSummaryEntry,
 		submitStop
 	} from '$lib/api/driver-ops.remote';
 
 	const currentRun = getCurrentRun();
-	let roadDescription = $state('');
-	let roadSeverity = $state<'low' | 'medium' | 'high'>('medium');
 	let collectionVolumeKg = $state('');
 	let runIssues = $state('');
 	let delayNotes = $state('');
@@ -36,16 +34,6 @@
 		await markStop(currentRun.current.run.id, stopId, status);
 	}
 
-	async function reportRoadIssue() {
-		const runId = currentRun.ready && currentRun.current?.run ? currentRun.current.run.id : undefined;
-		await submitRoadIssue({
-			runId,
-			severity: roadSeverity,
-			description: roadDescription
-		});
-		roadDescription = '';
-	}
-
 	async function saveRunSummary() {
 		if (!currentRun.current) return;
 
@@ -65,228 +53,295 @@
 			submittingSummary = false;
 		}
 	}
+
+	function routeLines() {
+		if (!currentRun.current?.routeGeometry) return [];
+		return [
+			{
+				points: currentRun.current.routeGeometry.coordinates.map(([lng, lat]) => [lat, lng] as [number, number]),
+				label: `Run #${currentRun.current.run.id}`,
+				color: '#0ea5e9',
+				weight: 5
+			},
+			...currentRun.current.roadIssues
+				.filter((issue) => issue.startLatitude !== null && issue.startLongitude !== null && issue.endLatitude !== null && issue.endLongitude !== null)
+				.map((issue) => ({
+					points: [
+						[issue.startLatitude as number, issue.startLongitude as number],
+						[issue.endLatitude as number, issue.endLongitude as number]
+					] as Array<[number, number]>,
+					label: `${issue.issueType} • ${issue.trafficLevel}`,
+					color:
+						issue.severity === 'high'
+							? '#ef4444'
+							: issue.severity === 'medium'
+								? '#f59e0b'
+								: '#22c55e',
+					weight: 4,
+					dashArray: '10 8'
+				}))
+		];
+	}
+
+	function routeMarkers() {
+		if (!currentRun.current) return [];
+		return [
+			...currentRun.current.stops.map((stop) => ({
+				lat: stop.latitude,
+				lng: stop.longitude,
+				label: `Stop ${stop.sequence} • ${stop.status}`,
+				color: '#0f172a',
+				fillColor: stop.status === 'done' ? '#22c55e' : stop.status === 'skipped' ? '#f59e0b' : '#38bdf8',
+				radius: 7
+			})),
+			...currentRun.current.roadIssues
+				.filter((issue) => issue.latitude !== null && issue.longitude !== null)
+				.map((issue) => ({
+					lat: issue.latitude as number,
+					lng: issue.longitude as number,
+					label: `${issue.issueType} • ${issue.description}`,
+					color: '#7f1d1d',
+					fillColor: '#fb7185',
+					radius: 8
+				}))
+		];
+	}
 </script>
 
 <div class="space-y-6">
-	<div class="flex items-center justify-between gap-2">
-		<div>
-			<h1 class="text-2xl font-semibold tracking-tight">Driver Run</h1>
-			<p class="text-sm text-slate-600">
-				Start the assigned run, follow the optimized stop order, and log operational outcomes.
-			</p>
-		</div>
-		<button
-			type="button"
-			onclick={() => currentRun.refresh()}
-			class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-100"
-		>
-			Refresh
-		</button>
-	</div>
+	<section class="overflow-hidden rounded-[2rem] bg-gradient-to-br from-sky-600 via-cyan-600 to-teal-600 p-6 text-white shadow-[0_24px_70px_rgba(8,47,73,0.16)]">
+		<p class="text-xs font-semibold uppercase tracking-[0.28em] text-white/70">Driver dashboard</p>
+		<h1 class="mt-2 font-[Georgia] text-4xl font-semibold tracking-tight">Follow the route. Watch the time.</h1>
+		<p class="mt-3 max-w-2xl text-sm leading-6 text-white/82">
+			View the optimized route, compare estimated and actual time, and keep stop progress updated while road-condition reports stay on their own tab.
+		</p>
+	</section>
 
 	{#if currentRun.loading && !currentRun.ready}
-		<p class="text-sm text-slate-500">Loading run assignment...</p>
+		<p class="rounded-[1.6rem] bg-white/85 px-4 py-10 text-sm text-slate-500 shadow-[0_24px_70px_rgba(8,47,73,0.12)]">
+			Loading run assignment…
+		</p>
 	{:else if currentRun.ready && !currentRun.current}
-		<div class="rounded-xl bg-white p-4 text-sm text-slate-600 ring-1 ring-slate-200">
-			No active run assigned today.
-		</div>
+		<section class="rounded-[2rem] border border-white/70 bg-white/85 p-6 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
+			<h2 class="font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">No active run</h2>
+			<p class="mt-2 text-sm text-slate-600">No route run is assigned for today yet.</p>
+		</section>
 	{:else if currentRun.ready && currentRun.current}
-		<div class="space-y-4">
-			<section class="rounded-xl bg-white p-4 ring-1 ring-slate-200">
+		<div class="space-y-6">
+			<section class="rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
 				<div class="flex flex-wrap items-start justify-between gap-3">
 					<div>
-						<h2 class="text-sm font-semibold text-slate-800">
-							Run #{currentRun.current.run.id} • {currentRun.current.run.status}
+						<p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
+							Run #{currentRun.current.run.id}
+						</p>
+						<h2 class="mt-2 font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
+							{currentRun.current.run.status === 'planned' ? 'Ready to start' : 'Route in progress'}
 						</h2>
-						<p class="mt-1 text-sm text-slate-600">
-							Date: {currentRun.current.run.runDate} • Planned distance: {currentRun.current.run.plannedDistanceKm.toFixed(2)} km
+						<p class="mt-2 text-sm text-slate-600">
+							{currentRun.current.run.runDate} • {currentRun.current.run.plannedDistanceKm.toFixed(1)} km planned
 						</p>
 					</div>
 
-					{#if currentRun.current.run.status === 'planned'}
-						<button
-							type="button"
-							onclick={() => startCurrentRun(currentRun.current!.run.id)}
-							class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+					<div class="flex flex-wrap gap-2">
+						<a
+							href="/driver/reports"
+							class="rounded-full border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-sky-900 hover:bg-sky-50"
 						>
-							Start run
-						</button>
-					{:else}
-						<span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-800">
-							Run started
-						</span>
+							Report road issue
+						</a>
+						{#if currentRun.current.run.status === 'planned'}
+							<button
+								type="button"
+								onclick={() => startCurrentRun(currentRun.current!.run.id)}
+								class="rounded-full bg-sky-950 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-900"
+							>
+								Start run
+							</button>
+						{/if}
+					</div>
+				</div>
+
+				<div class="mt-5 grid gap-3 md:grid-cols-4">
+					<div class="rounded-[1.3rem] bg-gradient-to-br from-cyan-500 to-sky-600 p-4 text-white">
+						<p class="text-xs uppercase tracking-[0.18em] text-white/70">Stops</p>
+						<p class="mt-2 text-3xl font-semibold">{currentRun.current.stops.length}</p>
+					</div>
+					<div class="rounded-[1.3rem] bg-gradient-to-br from-emerald-400 to-teal-600 p-4 text-white">
+						<p class="text-xs uppercase tracking-[0.18em] text-white/70">Estimated time</p>
+						<p class="mt-2 text-3xl font-semibold">{currentRun.current.run.estimatedDurationMinutes.toFixed(0)}m</p>
+					</div>
+					<div class="rounded-[1.3rem] bg-gradient-to-br from-amber-300 to-orange-500 p-4 text-slate-950">
+						<p class="text-xs uppercase tracking-[0.18em] text-slate-900/60">Time taken</p>
+						<p class="mt-2 text-3xl font-semibold">{currentRun.current.elapsedMinutes.toFixed(0)}m</p>
+					</div>
+					<div class="rounded-[1.3rem] bg-gradient-to-br from-rose-300 to-pink-500 p-4 text-slate-950">
+						<p class="text-xs uppercase tracking-[0.18em] text-slate-900/60">Road issues</p>
+						<p class="mt-2 text-3xl font-semibold">{currentRun.current.roadIssues.length}</p>
+					</div>
+				</div>
+			</section>
+
+			<section class="rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
+				<div class="flex flex-wrap items-center justify-between gap-3">
+					<div>
+						<h2 class="font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
+							Route map
+						</h2>
+						<p class="text-sm text-slate-600">
+							Optimized path plus reported route-condition segments.
+						</p>
+					</div>
+					{#if currentRun.current.optimizerMetadata}
+						<div class="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
+							Risk {currentRun.current.optimizerMetadata.riskScore?.toFixed(0) ?? '0'} • Congestion {currentRun.current.optimizerMetadata.congestionScore?.toFixed(0) ?? '0'}
+						</div>
 					{/if}
 				</div>
 
-				<div class="mt-4 grid gap-3 sm:grid-cols-3">
-					<article class="rounded-lg bg-slate-50 px-3 py-3">
-						<p class="text-xs uppercase tracking-wide text-slate-500">Stops</p>
-						<p class="mt-1 text-xl font-semibold text-slate-900">{currentRun.current.stops.length}</p>
-					</article>
-					<article class="rounded-lg bg-slate-50 px-3 py-3">
-						<p class="text-xs uppercase tracking-wide text-slate-500">Completed</p>
-						<p class="mt-1 text-xl font-semibold text-slate-900">
-							{currentRun.current.stops.filter((stop) => stop.status === 'done').length}
-						</p>
-					</article>
-					<article class="rounded-lg bg-slate-50 px-3 py-3">
-						<p class="text-xs uppercase tracking-wide text-slate-500">Skipped</p>
-						<p class="mt-1 text-xl font-semibold text-slate-900">
-							{currentRun.current.stops.filter((stop) => stop.status === 'skipped').length}
-						</p>
-					</article>
+				<div class="mt-4">
+					<InsightMap
+						ariaLabel="Driver route dashboard map"
+						markers={routeMarkers()}
+						polylines={routeLines()}
+					/>
 				</div>
 			</section>
 
-			<section class="grid gap-3">
-				{#each currentRun.current.stops as stop}
-					<article class="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-						<div class="flex flex-wrap items-center justify-between gap-2">
-							<div>
-								<p class="text-sm font-semibold text-slate-900">
-									Stop {stop.sequence} • {stop.status}
-								</p>
-								<p class="mt-1 text-xs text-slate-500">
-									Lat/Lng: {stop.latitude.toFixed(5)}, {stop.longitude.toFixed(5)}
-									{#if stop.zoneId}
-										• Zone {stop.zoneId}
-									{/if}
-								</p>
+			<section class="space-y-4 rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
+				<div class="flex flex-wrap items-center justify-between gap-3">
+					<div>
+						<h2 class="font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
+							Stop checklist
+						</h2>
+						<p class="text-sm text-slate-600">Mark each stop as done or skipped as you work through the route.</p>
+					</div>
+					<button
+						type="button"
+						onclick={() => currentRun.refresh()}
+						class="rounded-full border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-sky-900 hover:bg-sky-50"
+					>
+						Refresh
+					</button>
+				</div>
+
+				<div class="grid gap-4">
+					{#each currentRun.current.stops as stop}
+						<article class="rounded-[1.5rem] border border-sky-100 bg-gradient-to-br from-white to-sky-50 p-4">
+							<div class="flex flex-wrap items-center justify-between gap-3">
+								<div>
+									<p class="font-semibold text-slate-900">Stop {stop.sequence}</p>
+									<p class="mt-1 text-xs text-slate-500">
+										{stop.latitude.toFixed(5)}, {stop.longitude.toFixed(5)}
+										{#if stop.zoneId}
+											• Zone {stop.zoneId}
+										{/if}
+									</p>
+								</div>
+
+								<div class="flex flex-wrap gap-2">
+									<a
+										href={`https://www.google.com/maps/search/?api=1&query=${stop.latitude},${stop.longitude}`}
+										target="_blank"
+										rel="noreferrer"
+										class="rounded-full border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-900 hover:bg-sky-50"
+									>
+										Open map
+									</a>
+									<button
+										type="button"
+										onclick={() => markCurrentStop(stop.id, 'done')}
+										disabled={stop.status !== 'pending'}
+										class="rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+									>
+										Done
+									</button>
+									<button
+										type="button"
+										onclick={() => markCurrentStop(stop.id, 'skipped')}
+										disabled={stop.status !== 'pending'}
+										class="rounded-full bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+									>
+										Skipped
+									</button>
+								</div>
 							</div>
-							<div class="flex flex-wrap gap-2">
-								<a
-									href={`https://www.google.com/maps/search/?api=1&query=${stop.latitude},${stop.longitude}`}
-									target="_blank"
-									rel="noreferrer"
-									class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-slate-100"
-								>
-									Open map
-								</a>
-								<button
-									type="button"
-									onclick={() => markCurrentStop(stop.id, 'done')}
-									disabled={stop.status !== 'pending'}
-									class="rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-								>
-									Done
-								</button>
-								<button
-									type="button"
-									onclick={() => markCurrentStop(stop.id, 'skipped')}
-									disabled={stop.status !== 'pending'}
-									class="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
-								>
-									Skipped
-								</button>
-							</div>
+						</article>
+					{/each}
+				</div>
+			</section>
+
+			{#if currentRun.current.run.status === 'completed'}
+				<section class="space-y-4 rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
+					<h2 class="font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
+						Run summary
+					</h2>
+					{#if currentRun.current.summary}
+						<div class="rounded-[1.4rem] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+							Run summary submitted on {new Date(currentRun.current.summary.createdAt).toLocaleString()}.
 						</div>
-					</article>
-				{/each}
-			</section>
-		</div>
-	{/if}
+					{/if}
 
-	<section class="space-y-3 rounded-xl bg-white p-4 ring-1 ring-slate-200">
-		<h2 class="text-sm font-semibold text-slate-800">Report Road Condition</h2>
-		<div class="grid gap-3 sm:grid-cols-3">
-			<label class="text-sm font-medium text-slate-700 sm:col-span-1">
-				Severity
-				<select
-					bind:value={roadSeverity}
-					class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 outline-none ring-blue-500 focus:ring"
-				>
-					<option value="low">Low</option>
-					<option value="medium">Medium</option>
-					<option value="high">High</option>
-				</select>
-			</label>
-			<label class="text-sm font-medium text-slate-700 sm:col-span-2">
-				Description
-				<input
-					bind:value={roadDescription}
-					placeholder="Road blocked, flooding, diversion, potholes, etc."
-					class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 outline-none ring-blue-500 focus:ring"
-				/>
-			</label>
-		</div>
-		<button
-			type="button"
-			onclick={reportRoadIssue}
-			disabled={!roadDescription.trim()}
-			class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-		>
-			Submit road issue
-		</button>
-	</section>
+					<div class="grid gap-3 sm:grid-cols-2">
+						<label class="text-sm font-medium text-slate-700">
+							Collection volume (kg)
+							<input
+								bind:value={collectionVolumeKg}
+								type="number"
+								min="0"
+								step="0.1"
+								placeholder="620"
+								class="mt-2 w-full rounded-[1.1rem] border border-sky-100 bg-sky-50 px-3 py-3"
+							/>
+						</label>
+						<label class="text-sm font-medium text-slate-700">
+							Missed pickups
+							<input
+								bind:value={missedPickups}
+								type="number"
+								min="0"
+								step="1"
+								class="mt-2 w-full rounded-[1.1rem] border border-sky-100 bg-sky-50 px-3 py-3"
+							/>
+						</label>
+						<label class="text-sm font-medium text-slate-700 sm:col-span-2">
+							Issues faced
+							<textarea
+								bind:value={runIssues}
+								rows="3"
+								placeholder="Missed pickups, access constraints, safety issues."
+								class="mt-2 w-full rounded-[1.1rem] border border-sky-100 bg-sky-50 px-3 py-3"
+							></textarea>
+						</label>
+						<label class="text-sm font-medium text-slate-700">
+							Delays
+							<textarea
+								bind:value={delayNotes}
+								rows="3"
+								placeholder="Traffic, queueing, diversions."
+								class="mt-2 w-full rounded-[1.1rem] border border-sky-100 bg-sky-50 px-3 py-3"
+							></textarea>
+						</label>
+						<label class="text-sm font-medium text-slate-700">
+							Road conditions
+							<textarea
+								bind:value={roadConditionNotes}
+								rows="3"
+								placeholder="Flooding, damaged surface, blocked section."
+								class="mt-2 w-full rounded-[1.1rem] border border-sky-100 bg-sky-50 px-3 py-3"
+							></textarea>
+						</label>
+					</div>
 
-	{#if currentRun.current?.run.status === 'completed'}
-		<section class="space-y-3 rounded-xl bg-white p-4 ring-1 ring-slate-200">
-			<h2 class="text-sm font-semibold text-slate-800">Run Summary</h2>
-			{#if currentRun.current.summary}
-				<div class="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-					Run summary submitted on {new Date(currentRun.current.summary.createdAt).toLocaleString()}.
-				</div>
+					<button
+						type="button"
+						onclick={saveRunSummary}
+						disabled={submittingSummary || !!currentRun.current.summary}
+						class="rounded-full bg-sky-950 px-5 py-3 text-sm font-semibold text-white hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
+					>
+						{submittingSummary ? 'Saving summary…' : currentRun.current.summary ? 'Summary already saved' : 'Save run summary'}
+					</button>
+				</section>
 			{/if}
-
-			<div class="grid gap-3 sm:grid-cols-2">
-				<label class="text-sm font-medium text-slate-700">
-					Collection volume (kg)
-					<input
-						bind:value={collectionVolumeKg}
-						type="number"
-						min="0"
-						step="0.1"
-						placeholder="e.g. 620"
-						class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 outline-none ring-blue-500 focus:ring"
-					/>
-				</label>
-				<label class="text-sm font-medium text-slate-700">
-					Missed pickups
-					<input
-						bind:value={missedPickups}
-						type="number"
-						min="0"
-						step="1"
-						class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 outline-none ring-blue-500 focus:ring"
-					/>
-				</label>
-				<label class="text-sm font-medium text-slate-700 sm:col-span-2">
-					Issues faced
-					<textarea
-						bind:value={runIssues}
-						rows="3"
-						placeholder="Missed pickups, access constraints, safety issues, etc."
-						class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 outline-none ring-blue-500 focus:ring"
-					></textarea>
-				</label>
-				<label class="text-sm font-medium text-slate-700">
-					Delays
-					<textarea
-						bind:value={delayNotes}
-						rows="3"
-						placeholder="Traffic, queueing, waiting time, diversions."
-						class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 outline-none ring-blue-500 focus:ring"
-					></textarea>
-				</label>
-				<label class="text-sm font-medium text-slate-700">
-					Road conditions
-					<textarea
-						bind:value={roadConditionNotes}
-						rows="3"
-						placeholder="Flooding, damaged surface, blocked section."
-						class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 outline-none ring-blue-500 focus:ring"
-					></textarea>
-				</label>
-			</div>
-
-			<button
-				type="button"
-				onclick={saveRunSummary}
-				disabled={submittingSummary || !!currentRun.current.summary}
-				class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-			>
-				{submittingSummary ? 'Saving summary...' : currentRun.current.summary ? 'Summary already saved' : 'Save run summary'}
-			</button>
-		</section>
+		</div>
 	{/if}
 </div>

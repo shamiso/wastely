@@ -11,6 +11,17 @@ import { toYmdDate } from '$lib/server/services/date.service';
 
 const stopStatuses = ['pending', 'done', 'skipped'] as const;
 type StopStatus = (typeof stopStatuses)[number];
+const roadIssueTypes = [
+	'congestion',
+	'pothole',
+	'flooding',
+	'closure',
+	'surface_damage',
+	'accident',
+	'other'
+] as const;
+const trafficLevels = ['light', 'moderate', 'heavy', 'standstill'] as const;
+
 type RunSummaryPayload = {
 	collectionVolumeKg?: number;
 	issues?: string;
@@ -27,6 +38,27 @@ function parseRunSummary(payloadJson: string | null): RunSummaryPayload | null {
 	} catch {
 		return null;
 	}
+}
+
+function parseJson<T>(payloadJson: string | null): T | null {
+	if (!payloadJson) return null;
+
+	try {
+		return JSON.parse(payloadJson) as T;
+	} catch {
+		return null;
+	}
+}
+
+function roundCoordinate(value: number | undefined | null) {
+	if (value === undefined || value === null) return null;
+	return Number(value.toFixed(6));
+}
+
+function calculateElapsedMinutes(run: typeof routeRun.$inferSelect) {
+	if (!run.startedAt) return 0;
+	const endTime = run.completedAt ?? Date.now();
+	return Number(((endTime - run.startedAt) / 60000).toFixed(2));
 }
 
 export async function getAssignedRun(driverUserId: string, runDate = toYmdDate()) {
@@ -57,9 +89,34 @@ export async function getAssignedRun(driverUserId: string, runDate = toYmdDate()
 		.orderBy(desc(driverEventLog.createdAt))
 		.limit(1);
 
+	const roadIssues = await db
+		.select()
+		.from(roadConditionReport)
+		.where(
+			run.id
+				? eq(roadConditionReport.routeRunId, run.id)
+				: eq(roadConditionReport.reporterUserId, driverUserId)
+		)
+		.orderBy(desc(roadConditionReport.createdAt));
+
 	return {
 		run,
 		stops,
+		roadIssues,
+		routeGeometry:
+			parseJson<{
+				type: 'LineString';
+				coordinates: Array<[number, number]>;
+			}>(run.routeGeometryJson) ?? null,
+		optimizerMetadata: parseJson<{
+			model?: string;
+			legDurationsMinutes?: number[];
+			riskScore?: number;
+			congestionScore?: number;
+			blockedLegs?: number;
+			issueIds?: Array<number | string>;
+		}>(run.optimizerMetadataJson) ?? null,
+		elapsedMinutes: calculateElapsedMinutes(run),
 		summary: summaryRow
 			? {
 					id: summaryRow.id,
@@ -177,22 +234,64 @@ export async function submitRoadConditionIssue(input: {
 	driverUserId: string;
 	runId?: number;
 	zoneId?: number;
+	issueType?: string;
 	severity: 'low' | 'medium' | 'high';
+	trafficLevel?: string;
 	description: string;
+	startLabel?: string;
+	endLabel?: string;
+	startLatitude?: number;
+	startLongitude?: number;
+	endLatitude?: number;
+	endLongitude?: number;
 	latitude?: number;
 	longitude?: number;
+	estimatedDelayMinutes?: number;
 }) {
 	if (!input.description.trim()) throw error(400, 'Description is required');
+	const issueType = roadIssueTypes.includes((input.issueType ?? 'other') as (typeof roadIssueTypes)[number])
+		? (input.issueType as (typeof roadIssueTypes)[number])
+		: 'other';
+	const trafficLevel = trafficLevels.includes(
+		(input.trafficLevel ?? 'moderate') as (typeof trafficLevels)[number]
+	)
+		? (input.trafficLevel as (typeof trafficLevels)[number])
+		: 'moderate';
+	const midpointLatitude =
+		input.startLatitude !== undefined &&
+		input.startLatitude !== null &&
+		input.endLatitude !== undefined &&
+		input.endLatitude !== null
+			? (input.startLatitude + input.endLatitude) / 2
+			: input.latitude;
+	const midpointLongitude =
+		input.startLongitude !== undefined &&
+		input.startLongitude !== null &&
+		input.endLongitude !== undefined &&
+		input.endLongitude !== null
+			? (input.startLongitude + input.endLongitude) / 2
+			: input.longitude;
 
 	const [created] = await db
 		.insert(roadConditionReport)
 		.values({
 			reporterUserId: input.driverUserId,
+			routeRunId: input.runId ?? null,
 			zoneId: input.zoneId ?? null,
+			issueType,
 			severity: input.severity,
+			trafficLevel,
 			description: input.description.trim(),
-			latitude: input.latitude ?? null,
-			longitude: input.longitude ?? null
+			startLabel: input.startLabel?.trim() || null,
+			endLabel: input.endLabel?.trim() || null,
+			startLatitude: roundCoordinate(input.startLatitude),
+			startLongitude: roundCoordinate(input.startLongitude),
+			endLatitude: roundCoordinate(input.endLatitude),
+			endLongitude: roundCoordinate(input.endLongitude),
+			latitude: roundCoordinate(midpointLatitude),
+			longitude: roundCoordinate(midpointLongitude),
+			estimatedDelayMinutes: input.estimatedDelayMinutes ?? 0,
+			updatedAt: Date.now()
 		})
 		.returning();
 
@@ -202,6 +301,7 @@ export async function submitRoadConditionIssue(input: {
 		eventType: 'road_condition_report',
 		payloadJson: JSON.stringify({
 			roadConditionReportId: created.id,
+			issueType,
 			severity: input.severity
 		})
 	});
@@ -268,4 +368,70 @@ export async function submitRunSummary(input: {
 		createdAt: created.createdAt,
 		...payload
 	};
+}
+
+export async function listDriverRouteHistory(driverUserId: string, limit = 8) {
+	const runs = await db
+		.select()
+		.from(routeRun)
+		.where(eq(routeRun.driverUserId, driverUserId))
+		.orderBy(desc(routeRun.createdAt))
+		.limit(limit);
+
+	if (runs.length === 0) return [];
+
+	const histories = [];
+	for (const run of runs) {
+		const stops = await db
+			.select()
+			.from(routeStop)
+			.where(eq(routeStop.routeRunId, run.id))
+			.orderBy(asc(routeStop.sequence));
+
+		const roadIssues = await db
+			.select()
+			.from(roadConditionReport)
+			.where(eq(roadConditionReport.routeRunId, run.id))
+			.orderBy(desc(roadConditionReport.createdAt));
+
+		const [summaryRow] = await db
+			.select({
+				id: driverEventLog.id,
+				createdAt: driverEventLog.createdAt,
+				payloadJson: driverEventLog.payloadJson
+			})
+			.from(driverEventLog)
+			.where(and(eq(driverEventLog.routeRunId, run.id), eq(driverEventLog.eventType, 'run_summary')))
+			.orderBy(desc(driverEventLog.createdAt))
+			.limit(1);
+
+		histories.push({
+			run,
+			stops,
+			roadIssues,
+			elapsedMinutes: calculateElapsedMinutes(run),
+			routeGeometry:
+				parseJson<{
+					type: 'LineString';
+					coordinates: Array<[number, number]>;
+				}>(run.routeGeometryJson) ?? null,
+			optimizerMetadata: parseJson<{
+				model?: string;
+				legDurationsMinutes?: number[];
+				riskScore?: number;
+				congestionScore?: number;
+				blockedLegs?: number;
+				issueIds?: Array<number | string>;
+			}>(run.optimizerMetadataJson) ?? null,
+			summary: summaryRow
+				? {
+						id: summaryRow.id,
+						createdAt: summaryRow.createdAt,
+						...(parseRunSummary(summaryRow.payloadJson) ?? {})
+					}
+				: null
+		});
+	}
+
+	return histories;
 }

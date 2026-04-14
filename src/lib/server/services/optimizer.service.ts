@@ -1,9 +1,11 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, gte, inArray } from 'drizzle-orm';
 import { error } from '@sveltejs/kit';
+import { optimizeRoute, type RouteIssue } from '$lib/domain/route-optimizer';
 import { db } from '$lib/server/db';
 import {
 	citizenReport,
 	driverProfile,
+	roadConditionReport,
 	routeRun,
 	routeStop,
 	userRole,
@@ -13,11 +15,7 @@ import {
 import { toYmdDate } from '$lib/server/services/date.service';
 import { refreshZoneForecasts } from '$lib/server/services/forecast.service';
 import { getZoneOperationalSignals } from '$lib/server/services/intelligence.service';
-import {
-	getOsrmTripDistanceKm,
-	haversineDistanceKm,
-	orderByNearestNeighbor
-} from '$lib/server/services/geo.service';
+import { getOsrmTripDistanceKm } from '$lib/server/services/geo.service';
 
 type RunGenerationInput = {
 	runDate?: string;
@@ -38,6 +36,7 @@ export type DispatchRun = {
 	driverUserId: string | null;
 	driverName: string | null;
 	plannedDistanceKm: number;
+	estimatedDurationMinutes: number;
 	stopCount: number;
 	completedStopCount: number;
 	skippedStopCount: number;
@@ -46,48 +45,17 @@ export type DispatchRun = {
 
 function estimateDistance(points: Array<{ lat: number; lng: number }>): number {
 	if (points.length < 2) return 0;
-	let total = 0;
-	for (let i = 1; i < points.length; i += 1) {
-		total += haversineDistanceKm(points[i - 1], points[i]);
-	}
-	return Number(total.toFixed(2));
-}
-
-function orderByWeightedNearestNeighbor(
-	points: Array<{ id: number; lat: number; lng: number; zoneId: number | null }>,
-	zonePenaltyByZone: Map<number, number>
-) {
-	if (points.length <= 2) {
-		return orderByNearestNeighbor(points.map((point) => ({ id: point.id, lat: point.lat, lng: point.lng }))).map(
-			(point) => points.find((candidate) => candidate.id === point.id)!
-		);
-	}
-
-	const remaining = [...points];
-	const ordered = [remaining.shift() as (typeof points)[number]];
-
-	while (remaining.length > 0) {
-		const current = ordered[ordered.length - 1];
-		let candidateIndex = 0;
-		let candidateCost = Number.POSITIVE_INFINITY;
-
-		for (let i = 0; i < remaining.length; i += 1) {
-			const candidate = remaining[i];
-			const distance = haversineDistanceKm(current, candidate);
-			const zonePenalty =
-				candidate.zoneId === null ? 0 : (zonePenaltyByZone.get(candidate.zoneId) ?? 0) / 120;
-			const weightedCost = distance * (1 + zonePenalty);
-
-			if (weightedCost < candidateCost) {
-				candidateCost = weightedCost;
-				candidateIndex = i;
-			}
-		}
-
-		ordered.push(remaining.splice(candidateIndex, 1)[0]);
-	}
-
-	return ordered;
+	return Number(
+		points
+			.slice(1)
+			.reduce((sum, point, index) => {
+				const previous = points[index];
+				const dx = point.lat - previous.lat;
+				const dy = point.lng - previous.lng;
+				return sum + Math.sqrt(dx ** 2 + dy ** 2) * 111;
+			}, 0)
+			.toFixed(2)
+	);
 }
 
 export async function generateDailyRuns(input: RunGenerationInput = {}) {
@@ -98,7 +66,7 @@ export async function generateDailyRuns(input: RunGenerationInput = {}) {
 	const zonePenaltyByZone = new Map(
 		operationalSignals.map((signal) => [
 			signal.zoneId,
-			Number((signal.roadRiskScore + signal.summaryIssueScore).toFixed(2))
+			Number((signal.congestionScore + signal.summaryIssueScore + signal.missedPickupsScore).toFixed(2))
 		])
 	);
 
@@ -146,6 +114,26 @@ export async function generateDailyRuns(input: RunGenerationInput = {}) {
 		assignments[index % assignments.length].push(row);
 	});
 
+	const recentRoadIssues = await db
+		.select({
+			id: roadConditionReport.id,
+			routeRunId: roadConditionReport.routeRunId,
+			zoneId: roadConditionReport.zoneId,
+			issueType: roadConditionReport.issueType,
+			severity: roadConditionReport.severity,
+			trafficLevel: roadConditionReport.trafficLevel,
+			latitude: roadConditionReport.latitude,
+			longitude: roadConditionReport.longitude,
+			startLatitude: roadConditionReport.startLatitude,
+			startLongitude: roadConditionReport.startLongitude,
+			endLatitude: roadConditionReport.endLatitude,
+			endLongitude: roadConditionReport.endLongitude,
+			estimatedDelayMinutes: roadConditionReport.estimatedDelayMinutes,
+			createdAt: roadConditionReport.createdAt
+		})
+		.from(roadConditionReport)
+		.where(gte(roadConditionReport.createdAt, Date.now() - 14 * 24 * 60 * 60 * 1000));
+
 	let runsCreated = 0;
 	let stopsCreated = 0;
 
@@ -161,21 +149,46 @@ export async function generateDailyRuns(input: RunGenerationInput = {}) {
 				driverUserId: assignees[i],
 				status: 'planned',
 				plannedDistanceKm: 0,
+				estimatedDurationMinutes: 0,
 				updatedAt: Date.now()
 			})
 			.returning();
 
-		const ordered = orderByWeightedNearestNeighbor(
+		const batchIssues: RouteIssue[] = recentRoadIssues
+			.filter((issue) => {
+				if (issue.routeRunId && issue.routeRunId !== run.id) return false;
+				if (issue.zoneId === null) return true;
+				return batch.some((row) => row.report.zoneId === issue.zoneId);
+			})
+			.map((issue) => ({
+				id: issue.id,
+				issueType: issue.issueType,
+				severity: issue.severity,
+				trafficLevel: issue.trafficLevel,
+				latitude: issue.latitude,
+				longitude: issue.longitude,
+				startLatitude: issue.startLatitude,
+				startLongitude: issue.startLongitude,
+				endLatitude: issue.endLatitude,
+				endLongitude: issue.endLongitude,
+				estimatedDelayMinutes:
+					issue.estimatedDelayMinutes +
+					(issue.zoneId === null ? 0 : (zonePenaltyByZone.get(issue.zoneId) ?? 0) / 8)
+			}));
+
+		const routePlan = optimizeRoute(
 			batch.map((row) => ({
 				id: row.report.id,
 				lat: row.report.latitude,
 				lng: row.report.longitude,
-				zoneId: row.report.zoneId
-			}))
-		, zonePenaltyByZone);
+				zoneId: row.report.zoneId,
+				label: row.zone?.name ?? `Report ${row.report.id}`
+			})),
+			batchIssues
+		);
 
 		const reportById = new Map(batch.map((row) => [row.report.id, row.report]));
-		const stops = ordered.map((point, index) => {
+		const stops = routePlan.orderedPoints.map((point, index) => {
 			const report = reportById.get(point.id);
 			if (!report) throw new Error(`Missing report ${point.id}`);
 			return {
@@ -195,12 +208,32 @@ export async function generateDailyRuns(input: RunGenerationInput = {}) {
 
 		const osrmDistance =
 			(await getOsrmTripDistanceKm(stops.map((stop) => ({ lat: stop.latitude, lng: stop.longitude })))) ??
+			routePlan.plannedDistanceKm ??
 			estimateDistance(stops.map((stop) => ({ lat: stop.latitude, lng: stop.longitude })));
+		const firstStop = stops[0];
+		const lastStop = stops[stops.length - 1];
 
 		await db
 			.update(routeRun)
 			.set({
 				plannedDistanceKm: osrmDistance,
+				originLatitude: firstStop?.latitude ?? null,
+				originLongitude: firstStop?.longitude ?? null,
+				destinationLatitude: lastStop?.latitude ?? null,
+				destinationLongitude: lastStop?.longitude ?? null,
+				estimatedDurationMinutes: routePlan.estimatedDurationMinutes,
+				routeGeometryJson: JSON.stringify({
+					type: 'LineString',
+					coordinates: routePlan.geometry.map(([lat, lng]) => [lng, lat])
+				}),
+				optimizerMetadataJson: JSON.stringify({
+					model: 'condition-aware-nn-v2',
+					legDurationsMinutes: routePlan.legDurationsMinutes,
+					riskScore: routePlan.metadata.riskScore,
+					congestionScore: routePlan.metadata.congestionScore,
+					blockedLegs: routePlan.metadata.blockedLegs,
+					issueIds: routePlan.metadata.issueIds
+				}),
 				updatedAt: Date.now()
 			})
 			.where(eq(routeRun.id, run.id));
@@ -262,6 +295,7 @@ export async function listDispatchRuns(runDate = toYmdDate()): Promise<DispatchR
 			driverUserId: routeRun.driverUserId,
 			driverName: user.name,
 			plannedDistanceKm: routeRun.plannedDistanceKm,
+			estimatedDurationMinutes: routeRun.estimatedDurationMinutes,
 			createdAt: routeRun.createdAt
 		})
 		.from(routeRun)
@@ -308,6 +342,7 @@ export async function listDispatchRuns(runDate = toYmdDate()): Promise<DispatchR
 				driverUserId: run.driverUserId,
 				driverName: run.driverName ?? null,
 				plannedDistanceKm: run.plannedDistanceKm,
+				estimatedDurationMinutes: run.estimatedDurationMinutes,
 				stopCount: stopStats.total,
 				completedStopCount: stopStats.completed,
 				skippedStopCount: stopStats.skipped,

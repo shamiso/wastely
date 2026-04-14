@@ -6,7 +6,10 @@ import {
 	listDispatchDrivers,
 	listDispatchRuns
 } from '$lib/server/services/optimizer.service';
-import { listRecentDriverLogs } from '$lib/server/services/intelligence.service';
+import {
+	listDriverRouteInsights,
+	listRecentDriverLogs
+} from '$lib/server/services/intelligence.service';
 import {
 	deleteCitizenReport,
 	listAllCitizenReports,
@@ -30,6 +33,12 @@ export const listDriverLogs = query('unchecked', async (input: { limit?: number 
 	const event = getRequestEvent();
 	requireExactRole(event, 'admin');
 	return listRecentDriverLogs(input.limit ?? 12);
+});
+
+export const listDriverRouteReports = query('unchecked', async (input: { limit?: number } = {}) => {
+	const event = getRequestEvent();
+	requireExactRole(event, 'admin');
+	return listDriverRouteInsights(input.limit ?? 8);
 });
 
 export const listDrivers = query(async () => {

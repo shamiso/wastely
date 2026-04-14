@@ -9,7 +9,10 @@ import {
 } from '$lib/server/db/schema';
 import { toYmdDate } from '$lib/server/services/date.service';
 import { refreshZoneForecasts } from '$lib/server/services/forecast.service';
-import { getDatasetHealth as getIntegratedDatasetHealth } from '$lib/server/services/intelligence.service';
+import {
+	getCitizenReportMapSnapshot,
+	getDatasetHealth as getIntegratedDatasetHealth
+} from '$lib/server/services/intelligence.service';
 
 export type KpiSnapshot = {
 	date: string;
@@ -126,7 +129,9 @@ export async function getZoneDemand(date = toYmdDate()) {
 			zoneName: zone.name,
 			forecastDate: wasteForecast.forecastDate,
 			predictedVolumeKg: wasteForecast.predictedVolumeKg,
-			confidence: wasteForecast.confidence
+			confidence: wasteForecast.confidence,
+			modelSource: wasteForecast.modelSource,
+			modelVersion: wasteForecast.modelVersion
 		})
 		.from(wasteForecast)
 		.innerJoin(zone, eq(wasteForecast.zoneId, zone.id))
@@ -136,4 +141,8 @@ export async function getZoneDemand(date = toYmdDate()) {
 
 export async function getDatasetHealth() {
 	return getIntegratedDatasetHealth();
+}
+
+export async function getCitizenReportMap() {
+	return getCitizenReportMapSnapshot();
 }
