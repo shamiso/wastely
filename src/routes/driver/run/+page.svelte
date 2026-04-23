@@ -106,6 +106,24 @@
 				}))
 		];
 	}
+
+	let optimizerLegs = $derived(
+		currentRun.current?.optimizerMetadata?.legDurationsMinutes ?? []
+	);
+	let nextPendingStop = $derived(
+		currentRun.current?.stops.find((stop) => stop.status === 'pending') ?? null
+	);
+	let optimizerPlan = $derived(
+		currentRun.current
+			? currentRun.current.stops.map((stop, index) => ({
+					stop,
+					legMinutes: optimizerLegs[index] ?? 0,
+					cumulativeMinutes: optimizerLegs
+						.slice(0, index + 1)
+						.reduce((sum, value) => sum + value, 0)
+				}))
+			: []
+	);
 </script>
 
 <div class="space-y-6">
@@ -204,6 +222,96 @@
 						markers={routeMarkers()}
 						polylines={routeLines()}
 					/>
+				</div>
+			</section>
+
+			<section class="rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
+				<div class="flex flex-wrap items-start justify-between gap-3">
+					<div>
+						<p class="text-xs font-semibold uppercase tracking-[0.18em] text-teal-700">
+							Route optimizer
+						</p>
+						<h2 class="mt-2 font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
+							Optimizer guidance
+						</h2>
+						<p class="mt-2 text-sm text-slate-600">
+							Recommended stop order, leg timing, and route risk summary for the assigned run.
+						</p>
+					</div>
+					{#if currentRun.current.optimizerMetadata}
+						<div class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
+							{currentRun.current.optimizerMetadata.model ?? 'condition-aware'}
+						</div>
+					{/if}
+				</div>
+
+				<div class="mt-5 grid gap-4 lg:grid-cols-[0.82fr_1.18fr]">
+					<div class="grid gap-3">
+						<div class="rounded-[1.35rem] bg-gradient-to-br from-cyan-500 to-sky-600 p-4 text-white">
+							<p class="text-xs uppercase tracking-[0.18em] text-white/70">Next recommended stop</p>
+							<p class="mt-2 text-3xl font-semibold">
+								{nextPendingStop ? `Stop ${nextPendingStop.sequence}` : 'Route complete'}
+							</p>
+							<p class="mt-2 text-sm text-white/78">
+								{nextPendingStop
+									? `${nextPendingStop.latitude.toFixed(5)}, ${nextPendingStop.longitude.toFixed(5)}`
+									: 'All assigned stops are done or skipped.'}
+							</p>
+						</div>
+						<div class="rounded-[1.35rem] bg-gradient-to-br from-emerald-400 to-teal-600 p-4 text-white">
+							<p class="text-xs uppercase tracking-[0.18em] text-white/70">Estimated full route</p>
+							<p class="mt-2 text-3xl font-semibold">
+								{currentRun.current.run.estimatedDurationMinutes.toFixed(0)} min
+							</p>
+							<p class="mt-2 text-sm text-white/78">
+								Distance {currentRun.current.run.plannedDistanceKm.toFixed(1)} km
+							</p>
+						</div>
+						<div class="grid gap-3 sm:grid-cols-2">
+							<div class="rounded-[1.25rem] bg-amber-50 p-4">
+								<p class="text-xs uppercase tracking-[0.18em] text-amber-700">Blocked legs</p>
+								<p class="mt-2 text-3xl font-semibold text-slate-900">
+									{currentRun.current.optimizerMetadata?.blockedLegs ?? 0}
+								</p>
+							</div>
+							<div class="rounded-[1.25rem] bg-rose-50 p-4">
+								<p class="text-xs uppercase tracking-[0.18em] text-rose-700">Risk score</p>
+								<p class="mt-2 text-3xl font-semibold text-slate-900">
+									{currentRun.current.optimizerMetadata?.riskScore?.toFixed(0) ?? '0'}
+								</p>
+							</div>
+						</div>
+					</div>
+
+					<div class="rounded-[1.45rem] border border-sky-100 bg-gradient-to-br from-white to-sky-50 p-4">
+						<div class="flex items-center justify-between gap-3">
+							<p class="text-sm font-semibold text-slate-900">Recommended stop order</p>
+							<p class="text-xs uppercase tracking-[0.16em] text-slate-500">
+								Leg ETA and cumulative ETA
+							</p>
+						</div>
+
+						<div class="mt-4 space-y-3">
+							{#each optimizerPlan as item}
+								<div class="flex flex-wrap items-center justify-between gap-3 rounded-[1.15rem] bg-white px-4 py-3">
+									<div>
+										<p class="font-semibold text-slate-900">Stop {item.stop.sequence}</p>
+										<p class="mt-1 text-xs text-slate-500">
+											{item.stop.latitude.toFixed(5)}, {item.stop.longitude.toFixed(5)}
+										</p>
+									</div>
+									<div class="text-right">
+										<p class="text-sm font-semibold text-slate-900">
+											{item.legMinutes.toFixed(0)} min leg
+										</p>
+										<p class="mt-1 text-xs text-slate-500">
+											ETA +{item.cumulativeMinutes.toFixed(0)} min
+										</p>
+									</div>
+								</div>
+							{/each}
+						</div>
+					</div>
 				</div>
 			</section>
 

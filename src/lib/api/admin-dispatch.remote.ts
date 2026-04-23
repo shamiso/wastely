@@ -1,10 +1,12 @@
 import { command, getRequestEvent, query } from '$app/server';
 import { requireExactRole } from '$lib/server/services/authz.service';
 import {
+	dispatchCitizenReport,
 	assignDispatchRun,
 	generateDailyRuns,
 	listDispatchDrivers,
-	listDispatchRuns
+	listDispatchRuns,
+	listDispatchZones
 } from '$lib/server/services/optimizer.service';
 import {
 	listDriverRouteInsights,
@@ -47,6 +49,12 @@ export const listDrivers = query(async () => {
 	return listDispatchDrivers();
 });
 
+export const listZones = query(async () => {
+	const event = getRequestEvent();
+	requireExactRole(event, 'admin');
+	return listDispatchZones();
+});
+
 export const listRuns = query('unchecked', async (input: { runDate?: string } = {}) => {
 	const event = getRequestEvent();
 	requireExactRole(event, 'admin');
@@ -78,6 +86,29 @@ export const assignRun = command(
 		return assignDispatchRun({
 			runId: Number(input.runId),
 			driverUserId: input.driverUserId && input.driverUserId.trim() ? input.driverUserId : null
+		});
+	}
+);
+
+export const dispatchReport = command(
+	'unchecked',
+	async (input: {
+		reportId: number | string;
+		driverUserId: string;
+		zoneId?: number | string | null;
+		runDate?: string;
+	}) => {
+		const event = getRequestEvent();
+		requireExactRole(event, 'admin');
+
+		return dispatchCitizenReport({
+			reportId: Number(input.reportId),
+			driverUserId: input.driverUserId,
+			zoneId:
+				input.zoneId === undefined || input.zoneId === null || input.zoneId === ''
+					? undefined
+					: Number(input.zoneId),
+			runDate: input.runDate
 		});
 	}
 );

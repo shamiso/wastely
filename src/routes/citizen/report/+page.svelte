@@ -31,6 +31,7 @@
 	let searchError = $state('');
 	let searching = $state(false);
 	let resolvingZone = $state(false);
+	let zoneHint = $state('Choose a location and the zone will be selected automatically.');
 	let lastSubmittedReportId = $state<number | null>(null);
 	let hasLocation = $derived(latitude !== null && longitude !== null);
 
@@ -79,6 +80,9 @@
 		};
 		addressResults = [];
 		searchError = '';
+		zoneHint = entry.zoneName
+			? `Zone matched from the selected location.`
+			: 'Location selected. Resolving the closest waste zone…';
 		rememberAddress(entry);
 	}
 
@@ -123,6 +127,9 @@
 						zoneConfidence: result.confidence
 					}
 				: null;
+			zoneHint = result
+				? `Zone selected automatically from the map point.`
+				: 'No nearby zone could be inferred from that location yet.';
 		} finally {
 			resolvingZone = false;
 		}
@@ -146,6 +153,19 @@
 			zoneName: assignedZone?.zoneName ?? null,
 			zoneConfidence: assignedZone?.zoneConfidence ?? null
 		});
+	});
+
+	$effect(() => {
+		if (!hasLocation) {
+			assignedZone = null;
+			zoneHint = 'Choose a location and the zone will be selected automatically.';
+			return;
+		}
+		const timer = setTimeout(() => {
+			void resolveZoneFromMap();
+		}, 300);
+
+		return () => clearTimeout(timer);
 	});
 </script>
 
@@ -296,7 +316,7 @@
 							</p>
 						{:else}
 							<p class="mt-2 text-sm leading-6 text-slate-600">
-								Search for a place or infer the zone from the selected map point.
+								{zoneHint}
 							</p>
 						{/if}
 					</div>
@@ -310,14 +330,9 @@
 							<p class="mt-1 text-sm font-semibold text-slate-900">
 								Longitude {longitude?.toFixed(6)}
 							</p>
-							<button
-								type="button"
-								onclick={resolveZoneFromMap}
-								disabled={resolvingZone}
-								class="mt-4 rounded-full bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-900 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-							>
-								{resolvingZone ? 'Assigning zone…' : 'Infer zone from map point'}
-							</button>
+							<p class="mt-4 text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">
+								{resolvingZone ? 'Selecting zone automatically…' : 'Zone is selected automatically from the current pin'}
+							</p>
 						{:else}
 							<p class="mt-2 text-sm leading-6 text-slate-600">
 								Search for an address or tap the map to place the report location.
@@ -356,14 +371,18 @@
 			<div class="mt-5 flex flex-wrap items-center gap-3">
 				<button
 					type="submit"
-					disabled={!hasLocation}
+					disabled={!hasLocation || resolvingZone}
 					class="rounded-full bg-sky-950 px-5 py-3 text-sm font-semibold text-white hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
 				>
-					Submit report
+					{resolvingZone ? 'Selecting zone…' : 'Submit report'}
 				</button>
 				{#if !hasLocation}
 					<p class="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">
 						Select a map point before submitting
+					</p>
+				{:else if resolvingZone}
+					<p class="text-xs font-semibold uppercase tracking-[0.14em] text-sky-700">
+						Holding submission until the zone is selected
 					</p>
 				{/if}
 			</div>

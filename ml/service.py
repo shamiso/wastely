@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from env_loader import load_project_env
 from waste_model import (
     WasteVolumeModel,
     load_model,
@@ -17,6 +18,7 @@ from waste_model import (
     train_model,
 )
 
+load_project_env(Path(__file__))
 
 MODEL_PATH = Path(os.getenv("WASTELY_MODEL_PATH", Path(__file__).with_name("model.json")))
 DATA_API_URL = os.getenv("WASTELY_DATA_API", "http://127.0.0.1:5173/api/ml/training-data")

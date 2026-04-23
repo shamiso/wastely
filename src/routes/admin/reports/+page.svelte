@@ -1,10 +1,20 @@
 <script lang="ts">
+	import AdminReportQueueCard from '$lib/components/AdminReportQueueCard.svelte';
 	import InsightMap from '$lib/components/InsightMap.svelte';
 	import { citizenReportMap } from '$lib/api/dashboard.remote';
-	import { deleteReport, listAllReports, resolveReport } from '$lib/api/admin-dispatch.remote';
+	import {
+		listAllReports,
+		listDrivers,
+		listZones
+	} from '$lib/api/admin-dispatch.remote';
 
 	const reports = listAllReports();
 	const reportMap = citizenReportMap();
+	const drivers = listDrivers();
+	const zones = listZones();
+	let refreshing = $state(false);
+	let flashMessage = $state('');
+	let flashTone = $state<'success' | 'warning' | 'danger'>('success');
 
 	function reportColor(status: string) {
 		if (status === 'resolved') return '#34d399';
@@ -13,14 +23,26 @@
 		return '#0ea5e9';
 	}
 
-	async function setStatus(reportId: number, status: 'resolved' | 'rejected') {
-		await resolveReport({ reportId, status });
-		await Promise.all([reports.refresh(), reportMap.refresh()]);
+	async function refreshPage() {
+		refreshing = true;
+		try {
+			await Promise.all([
+				reports.refresh(),
+				reportMap.refresh(),
+				drivers.refresh(),
+				zones.refresh()
+			]);
+		} finally {
+			refreshing = false;
+		}
 	}
 
-	async function removeReport(reportId: number) {
-		if (!confirm(`Delete report #${reportId}?`)) return;
-		await deleteReport({ reportId });
+	async function handleReportChanged(detail: {
+		message: string;
+		tone?: 'success' | 'warning' | 'danger';
+	}) {
+		flashMessage = detail.message;
+		flashTone = detail.tone ?? 'success';
 		await Promise.all([reports.refresh(), reportMap.refresh()]);
 	}
 </script>
@@ -41,13 +63,11 @@
 			<div class="flex gap-2">
 				<button
 					type="button"
-					onclick={() => {
-						reports.refresh();
-						reportMap.refresh();
-					}}
-					class="rounded-full bg-sky-950 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-900"
+					onclick={refreshPage}
+					disabled={refreshing}
+					class="rounded-full bg-sky-950 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
 				>
-					Refresh queue
+					{refreshing ? 'Refreshing…' : 'Refresh queue'}
 				</button>
 				<a
 					href="/admin/driver-reports"
@@ -59,6 +79,20 @@
 		</div>
 	</section>
 
+	{#if flashMessage}
+		<p
+			class={`rounded-[1.35rem] px-4 py-3 text-sm font-medium shadow-[0_20px_60px_rgba(8,47,73,0.08)] ${
+				flashTone === 'danger'
+					? 'bg-rose-50 text-rose-700'
+					: flashTone === 'warning'
+						? 'bg-amber-50 text-amber-700'
+						: 'bg-emerald-50 text-emerald-700'
+			}`}
+		>
+			{flashMessage}
+		</p>
+	{/if}
+
 	<div class="grid gap-6 xl:grid-cols-[1.25fr_0.75fr]">
 		<section class="rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
 			<h2 class="font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">Complaint origin map</h2>
@@ -67,7 +101,9 @@
 			</p>
 
 			<div class="mt-4">
-				{#if reportMap.ready && reportMap.current.pins.length > 0}
+				{#if reportMap.loading && !reportMap.ready}
+					<p class="rounded-2xl bg-sky-50 px-4 py-10 text-sm text-slate-500">Loading report map…</p>
+				{:else if reportMap.ready && reportMap.current.pins.length > 0}
 					<InsightMap
 						ariaLabel="Citizen report queue map"
 						markers={reportMap.current.pins.map((pin) => ({
@@ -122,7 +158,9 @@
 				<h2 class="font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
 					Queue detail
 				</h2>
-				<p class="text-sm text-slate-600">Resolve, reject, or remove reports directly from the list.</p>
+				<p class="text-sm text-slate-600">
+					Resolve now opens a dispatch workflow with zone and driver assignment.
+				</p>
 			</div>
 			<div class="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
 				{reports.ready ? `${reports.current.length} reports` : 'Loading'}
@@ -135,62 +173,13 @@
 			<p class="rounded-2xl bg-sky-50 px-4 py-10 text-sm text-slate-500">No reports in queue.</p>
 		{:else if reports.ready}
 			<div class="grid gap-4 lg:grid-cols-2">
-				{#each reports.current as report}
-					<article class="rounded-[1.5rem] border border-sky-100 bg-gradient-to-br from-white to-sky-50 p-4">
-						<div class="flex flex-wrap items-center justify-between gap-2">
-							<p class="text-sm font-semibold text-slate-900">
-								#{report.id} • {report.category.replace('_', ' ')}
-							</p>
-							<span class="rounded-full bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-sky-700">
-								{report.status}
-							</span>
-						</div>
-
-						<p class="mt-3 text-sm leading-6 text-slate-700">{report.description}</p>
-						<p class="mt-3 text-xs text-slate-500">
-							{report.latitude.toFixed(5)}, {report.longitude.toFixed(5)}
-							{#if report.zoneName}
-								• {report.zoneName}
-							{/if}
-						</p>
-						<p class="mt-1 text-xs text-slate-500">
-							Submitted {new Date(report.createdAt).toLocaleString()}
-						</p>
-
-						<div class="mt-4 flex flex-wrap gap-2">
-							<button
-								type="button"
-								onclick={() => setStatus(report.id, 'resolved')}
-								class="rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-400"
-							>
-								Resolve
-							</button>
-							<button
-								type="button"
-								onclick={() => setStatus(report.id, 'rejected')}
-								class="rounded-full bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-400"
-							>
-								Reject
-							</button>
-							<button
-								type="button"
-								onclick={() => removeReport(report.id)}
-								class="rounded-full bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500"
-							>
-								Delete
-							</button>
-							{#if report.photoUrl}
-								<a
-									href={report.photoUrl}
-									target="_blank"
-									rel="noreferrer"
-									class="rounded-full border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-900 hover:bg-sky-50"
-								>
-									View photo
-								</a>
-							{/if}
-						</div>
-					</article>
+				{#each reports.current as report (report.id)}
+					<AdminReportQueueCard
+						{report}
+						{drivers}
+						{zones}
+						onChanged={handleReportChanged}
+					/>
 				{/each}
 			</div>
 		{/if}

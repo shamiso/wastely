@@ -2,6 +2,7 @@ import { env } from '$env/dynamic/private';
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { collectionPoint, zone } from '$lib/server/db/schema';
+import { ensureReferenceData } from '$lib/server/services/reference-data.service';
 
 export type GeoPoint = {
 	id: number;
@@ -70,6 +71,7 @@ export function orderByNearestNeighbor(points: GeoPoint[]): GeoPoint[] {
 }
 
 async function getLocalAddressMatches(query: string): Promise<AddressSuggestion[]> {
+	await ensureReferenceData();
 	const normalizedQuery = query.trim().toLowerCase();
 	if (!normalizedQuery) return [];
 
@@ -221,6 +223,7 @@ export async function resolveZoneFromCoordinates(
 	lat: number,
 	lng: number
 ): Promise<ZoneResolution | null> {
+	await ensureReferenceData();
 	const collectionPointRows = await db
 		.select({
 			zoneId: zone.id,

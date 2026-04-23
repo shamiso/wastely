@@ -2,6 +2,7 @@ import { and, asc, desc, eq } from 'drizzle-orm';
 import { error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import {
+	citizenReport,
 	driverEventLog,
 	roadConditionReport,
 	routeRun,
@@ -187,6 +188,18 @@ export async function submitStopUpdate(input: {
 		.returning();
 
 	if (!updatedStop) throw error(404, 'Stop not found');
+
+	if (updatedStop.sourceReportId) {
+		const reportStatus =
+			status === 'done' ? 'resolved' : status === 'skipped' ? 'open' : 'in_review';
+		await db
+			.update(citizenReport)
+			.set({
+				status: reportStatus,
+				updatedAt: timestamp
+			})
+			.where(eq(citizenReport.id, updatedStop.sourceReportId));
+	}
 
 	if (run.status === 'planned') {
 		await db

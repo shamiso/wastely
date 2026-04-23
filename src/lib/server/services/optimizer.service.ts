@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray } from 'drizzle-orm';
 import { error } from '@sveltejs/kit';
 import { optimizeRoute, type RouteIssue } from '$lib/domain/route-optimizer';
 import { db } from '$lib/server/db';
@@ -14,8 +14,10 @@ import {
 } from '$lib/server/db/schema';
 import { toYmdDate } from '$lib/server/services/date.service';
 import { refreshZoneForecasts } from '$lib/server/services/forecast.service';
+import { resolveZoneFromCoordinates } from '$lib/server/services/geo.service';
 import { getZoneOperationalSignals } from '$lib/server/services/intelligence.service';
 import { getOsrmTripDistanceKm } from '$lib/server/services/geo.service';
+import { ensureReferenceData } from '$lib/server/services/reference-data.service';
 
 type RunGenerationInput = {
 	runDate?: string;
@@ -27,6 +29,13 @@ export type DispatchDriver = {
 	name: string;
 	email: string;
 	vehicleId: number | null;
+};
+
+export type DispatchZone = {
+	id: number;
+	wardId: number;
+	name: string;
+	code: string;
 };
 
 export type DispatchRun = {
@@ -56,6 +65,189 @@ function estimateDistance(points: Array<{ lat: number; lng: number }>): number {
 			}, 0)
 			.toFixed(2)
 	);
+}
+
+async function listRecentRouteIssues() {
+	return db
+		.select({
+			id: roadConditionReport.id,
+			routeRunId: roadConditionReport.routeRunId,
+			zoneId: roadConditionReport.zoneId,
+			issueType: roadConditionReport.issueType,
+			severity: roadConditionReport.severity,
+			trafficLevel: roadConditionReport.trafficLevel,
+			latitude: roadConditionReport.latitude,
+			longitude: roadConditionReport.longitude,
+			startLatitude: roadConditionReport.startLatitude,
+			startLongitude: roadConditionReport.startLongitude,
+			endLatitude: roadConditionReport.endLatitude,
+			endLongitude: roadConditionReport.endLongitude,
+			estimatedDelayMinutes: roadConditionReport.estimatedDelayMinutes,
+			createdAt: roadConditionReport.createdAt
+		})
+		.from(roadConditionReport)
+		.where(gte(roadConditionReport.createdAt, Date.now() - 14 * 24 * 60 * 60 * 1000));
+}
+
+async function getAvailableDriverOrThrow(driverUserId: string) {
+	const [driver] = await db
+		.select({
+			userId: driverProfile.userId,
+			name: user.name,
+			email: user.email,
+			vehicleId: driverProfile.vehicleId
+		})
+		.from(driverProfile)
+		.innerJoin(userRole, eq(driverProfile.userId, userRole.userId))
+		.innerJoin(user, eq(driverProfile.userId, user.id))
+		.where(
+			and(
+				eq(driverProfile.userId, driverUserId),
+				eq(driverProfile.active, true),
+				eq(userRole.role, 'driver')
+			)
+		)
+		.limit(1);
+
+	if (!driver) throw error(400, 'Selected driver is not available.');
+	return driver;
+}
+
+async function rebuildPlannedRunRoute(input: {
+	runId: number;
+	wardId: number | null;
+	driverUserId: string | null;
+	stops: Array<{
+		zoneId: number | null;
+		sourceReportId: number;
+		latitude: number;
+		longitude: number;
+		label: string;
+	}>;
+}) {
+	if (input.stops.length === 0) {
+		throw error(400, 'At least one stop is required to build a route.');
+	}
+
+	const [recentRoadIssues, operationalSignals] = await Promise.all([
+		listRecentRouteIssues(),
+		getZoneOperationalSignals()
+	]);
+	const zonePenaltyByZone = new Map(
+		operationalSignals.map((signal) => [
+			signal.zoneId,
+			Number(
+				(
+					signal.congestionScore +
+					signal.summaryIssueScore +
+					signal.missedPickupsScore
+				).toFixed(2)
+			)
+		])
+	);
+	const zoneIds = new Set(
+		input.stops
+			.map((stop) => stop.zoneId)
+			.filter((zoneId): zoneId is number => zoneId !== null)
+	);
+
+	const batchIssues: RouteIssue[] = recentRoadIssues
+		.filter((issue) => {
+			if (issue.routeRunId && issue.routeRunId !== input.runId) return false;
+			if (issue.zoneId === null) return true;
+			return zoneIds.has(issue.zoneId);
+		})
+		.map((issue) => ({
+			id: issue.id,
+			issueType: issue.issueType,
+			severity: issue.severity,
+			trafficLevel: issue.trafficLevel,
+			latitude: issue.latitude,
+			longitude: issue.longitude,
+			startLatitude: issue.startLatitude,
+			startLongitude: issue.startLongitude,
+			endLatitude: issue.endLatitude,
+			endLongitude: issue.endLongitude,
+			estimatedDelayMinutes:
+				issue.estimatedDelayMinutes +
+				(issue.zoneId === null ? 0 : (zonePenaltyByZone.get(issue.zoneId) ?? 0) / 8)
+		}));
+
+	const routePlan = optimizeRoute(
+		input.stops.map((stop) => ({
+			id: stop.sourceReportId,
+			lat: stop.latitude,
+			lng: stop.longitude,
+			zoneId: stop.zoneId,
+			label: stop.label
+		})),
+		batchIssues
+	);
+	const stopByReportId = new Map(input.stops.map((stop) => [stop.sourceReportId, stop]));
+	const orderedStops = routePlan.orderedPoints.map((point) => {
+		const stop = stopByReportId.get(point.id);
+		if (!stop) {
+			throw error(500, `Route stop ${point.id} could not be mapped back to the report.`);
+		}
+		return stop;
+	});
+
+	await db.delete(routeStop).where(eq(routeStop.routeRunId, input.runId));
+	const insertedStops = await db
+		.insert(routeStop)
+		.values(
+			orderedStops.map((stop, index) => ({
+				routeRunId: input.runId,
+				zoneId: stop.zoneId,
+				sourceReportId: stop.sourceReportId,
+				sequence: index + 1,
+				latitude: stop.latitude,
+				longitude: stop.longitude,
+				action: 'collect' as const,
+				status: 'pending' as const,
+				updatedAt: Date.now()
+			}))
+		)
+		.returning();
+
+	const osrmDistance =
+		(await getOsrmTripDistanceKm(
+			insertedStops.map((stop) => ({ lat: stop.latitude, lng: stop.longitude }))
+		)) ??
+		routePlan.plannedDistanceKm ??
+		estimateDistance(insertedStops.map((stop) => ({ lat: stop.latitude, lng: stop.longitude })));
+	const firstStop = insertedStops[0];
+	const lastStop = insertedStops[insertedStops.length - 1];
+
+	const [updatedRun] = await db
+		.update(routeRun)
+		.set({
+			wardId: input.wardId,
+			driverUserId: input.driverUserId,
+			plannedDistanceKm: osrmDistance,
+			originLatitude: firstStop?.latitude ?? null,
+			originLongitude: firstStop?.longitude ?? null,
+			destinationLatitude: lastStop?.latitude ?? null,
+			destinationLongitude: lastStop?.longitude ?? null,
+			estimatedDurationMinutes: routePlan.estimatedDurationMinutes,
+			routeGeometryJson: JSON.stringify({
+				type: 'LineString',
+				coordinates: routePlan.geometry.map(([lat, lng]) => [lng, lat])
+			}),
+			optimizerMetadataJson: JSON.stringify({
+				model: 'condition-aware-nn-v2',
+				legDurationsMinutes: routePlan.legDurationsMinutes,
+				riskScore: routePlan.metadata.riskScore,
+				congestionScore: routePlan.metadata.congestionScore,
+				blockedLegs: routePlan.metadata.blockedLegs,
+				issueIds: routePlan.metadata.issueIds
+			}),
+			updatedAt: Date.now()
+		})
+		.where(eq(routeRun.id, input.runId))
+		.returning();
+
+	return updatedRun;
 }
 
 export async function generateDailyRuns(input: RunGenerationInput = {}) {
@@ -114,25 +306,7 @@ export async function generateDailyRuns(input: RunGenerationInput = {}) {
 		assignments[index % assignments.length].push(row);
 	});
 
-	const recentRoadIssues = await db
-		.select({
-			id: roadConditionReport.id,
-			routeRunId: roadConditionReport.routeRunId,
-			zoneId: roadConditionReport.zoneId,
-			issueType: roadConditionReport.issueType,
-			severity: roadConditionReport.severity,
-			trafficLevel: roadConditionReport.trafficLevel,
-			latitude: roadConditionReport.latitude,
-			longitude: roadConditionReport.longitude,
-			startLatitude: roadConditionReport.startLatitude,
-			startLongitude: roadConditionReport.startLongitude,
-			endLatitude: roadConditionReport.endLatitude,
-			endLongitude: roadConditionReport.endLongitude,
-			estimatedDelayMinutes: roadConditionReport.estimatedDelayMinutes,
-			createdAt: roadConditionReport.createdAt
-		})
-		.from(roadConditionReport)
-		.where(gte(roadConditionReport.createdAt, Date.now() - 14 * 24 * 60 * 60 * 1000));
+	const recentRoadIssues = await listRecentRouteIssues();
 
 	let runsCreated = 0;
 	let stopsCreated = 0;
@@ -286,6 +460,20 @@ export async function listDispatchDrivers(): Promise<DispatchDriver[]> {
 	return rows.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+export async function listDispatchZones(): Promise<DispatchZone[]> {
+	await ensureReferenceData();
+	const rows = await db.select().from(zone);
+	return rows
+		.filter((row) => !/^zone\b/i.test(row.name))
+		.map((row) => ({
+			id: row.id,
+			wardId: row.wardId,
+			name: row.name,
+			code: row.code
+		}))
+		.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export async function listDispatchRuns(runDate = toYmdDate()): Promise<DispatchRun[]> {
 	const runRows = await db
 		.select({
@@ -358,14 +546,7 @@ export async function assignDispatchRun(input: { runId: number; driverUserId: st
 	if (run.status !== 'planned') throw error(400, 'Only planned runs can be reassigned.');
 
 	if (input.driverUserId) {
-		const [driver] = await db
-			.select({ userId: driverProfile.userId })
-			.from(driverProfile)
-			.innerJoin(userRole, eq(driverProfile.userId, userRole.userId))
-			.where(and(eq(driverProfile.userId, input.driverUserId), eq(driverProfile.active, true), eq(userRole.role, 'driver')))
-			.limit(1);
-
-		if (!driver) throw error(400, 'Selected driver is not available.');
+		await getAvailableDriverOrThrow(input.driverUserId);
 	}
 
 	const [updated] = await db
@@ -378,4 +559,144 @@ export async function assignDispatchRun(input: { runId: number; driverUserId: st
 		.returning();
 
 	return updated;
+}
+
+export async function dispatchCitizenReport(input: {
+	reportId: number;
+	driverUserId: string;
+	zoneId?: number | null;
+	runDate?: string;
+}) {
+	const runDate = input.runDate ?? toYmdDate();
+	const [report] = await db
+		.select()
+		.from(citizenReport)
+		.where(eq(citizenReport.id, input.reportId))
+		.limit(1);
+
+	if (!report) throw error(404, 'Citizen report not found.');
+	if (report.status === 'resolved') throw error(400, 'This report is already resolved.');
+	if (report.status === 'rejected') throw error(400, 'Rejected reports cannot be dispatched.');
+
+	const driver = await getAvailableDriverOrThrow(input.driverUserId);
+	const resolvedZoneId =
+		input.zoneId ??
+		report.zoneId ??
+		(await resolveZoneFromCoordinates(report.latitude, report.longitude))?.zoneId ??
+		null;
+
+	if (!resolvedZoneId) {
+		throw error(400, 'Assign a zone before dispatching this report.');
+	}
+
+	const [zoneRow] = await db.select().from(zone).where(eq(zone.id, resolvedZoneId)).limit(1);
+	if (!zoneRow) throw error(400, 'Selected zone does not exist.');
+
+	const [existingAssignedStop] = await db
+		.select({
+			runId: routeRun.id,
+			status: routeRun.status,
+			driverUserId: routeRun.driverUserId
+		})
+		.from(routeStop)
+		.innerJoin(routeRun, eq(routeStop.routeRunId, routeRun.id))
+		.where(eq(routeStop.sourceReportId, report.id))
+		.orderBy(desc(routeRun.createdAt))
+		.limit(1);
+
+	if (existingAssignedStop?.status === 'in_progress') {
+		throw error(400, 'This report is already on a run that is in progress.');
+	}
+
+	const baseConditions = [
+		eq(routeRun.runDate, runDate),
+		eq(routeRun.status, 'planned'),
+		eq(routeRun.driverUserId, driver.userId)
+	];
+	if (zoneRow.wardId !== null) {
+		baseConditions.push(eq(routeRun.wardId, zoneRow.wardId));
+	}
+
+	const plannedRun =
+		(
+			await db
+				.select()
+				.from(routeRun)
+				.where(and(...baseConditions))
+				.orderBy(desc(routeRun.createdAt))
+				.limit(1)
+		)[0] ??
+		(existingAssignedStop?.status === 'planned'
+			? (
+					await db.select().from(routeRun).where(eq(routeRun.id, existingAssignedStop.runId)).limit(1)
+				)[0] ?? null
+			: null);
+
+	let runId = plannedRun?.id ?? null;
+
+	if (!runId) {
+		const [createdRun] = await db
+			.insert(routeRun)
+			.values({
+				runDate,
+				wardId: zoneRow.wardId,
+				driverUserId: driver.userId,
+				status: 'planned',
+				plannedDistanceKm: 0,
+				estimatedDurationMinutes: 0,
+				updatedAt: Date.now()
+			})
+			.returning();
+		runId = createdRun.id;
+	}
+
+	const existingStops = await db
+		.select()
+		.from(routeStop)
+		.where(eq(routeStop.routeRunId, runId))
+		.orderBy(routeStop.sequence);
+	const stopInputs = existingStops.map((stop) => ({
+		zoneId: stop.sourceReportId === report.id ? zoneRow.id : stop.zoneId,
+		sourceReportId: stop.sourceReportId as number,
+		latitude: stop.latitude,
+		longitude: stop.longitude,
+		label: stop.sourceReportId === report.id ? zoneRow.name : `Report ${stop.sourceReportId ?? stop.id}`
+	}));
+	const alreadyIncluded = stopInputs.some((stop) => stop.sourceReportId === report.id);
+	if (!alreadyIncluded) {
+		stopInputs.push({
+			zoneId: zoneRow.id,
+			sourceReportId: report.id,
+			latitude: report.latitude,
+			longitude: report.longitude,
+			label: zoneRow.name
+		});
+	}
+
+	const updatedRun = await rebuildPlannedRunRoute({
+		runId,
+		wardId: zoneRow.wardId,
+		driverUserId: driver.userId,
+		stops: stopInputs
+	});
+
+	await db
+		.update(citizenReport)
+		.set({
+			zoneId: zoneRow.id,
+			status: 'in_review',
+			updatedAt: Date.now()
+		})
+		.where(eq(citizenReport.id, report.id));
+
+	return {
+		reportId: report.id,
+		runId: updatedRun.id,
+		runDate: updatedRun.runDate,
+		driverUserId: driver.userId,
+		driverName: driver.name,
+		zoneId: zoneRow.id,
+		zoneName: zoneRow.name,
+		status: 'in_review' as const
+	};
 }

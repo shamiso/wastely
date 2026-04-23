@@ -1,21 +1,25 @@
 <script lang="ts">
+	import AdminReportQueueCard from '$lib/components/AdminReportQueueCard.svelte';
 	import {
 		assignRun,
-		deleteReport,
 		listDrivers,
 		listRuns,
+		listZones,
 		listOpenReports,
-		resolveReport,
 		runDispatch
 	} from '$lib/api/admin-dispatch.remote';
 
 	const openReports = listOpenReports();
 	const drivers = listDrivers();
+	const zones = listZones();
 	const initialRunDate = new Date().toISOString().slice(0, 10);
 	let runDate = $state(initialRunDate);
 	let dispatchRuns = $state(listRuns({ runDate: initialRunDate }));
 	let wardId = $state('');
 	let lastDispatchResult = $state<{ runsCreated: number; stopsCreated: number } | null>(null);
+	let queueRefreshing = $state(false);
+	let queueFlashMessage = $state('');
+	let queueFlashTone = $state<'success' | 'warning' | 'danger'>('success');
 
 	function loadDispatchRuns() {
 		dispatchRuns = listRuns({ runDate });
@@ -42,14 +46,21 @@
 		loadDispatchRuns();
 	}
 
-	async function closeReport(reportId: number, status: 'resolved' | 'rejected') {
-		await resolveReport({ reportId, status });
-		await openReports.refresh();
+	async function refreshQueue() {
+		queueRefreshing = true;
+		try {
+			await Promise.all([openReports.refresh(), zones.refresh(), drivers.refresh()]);
+		} finally {
+			queueRefreshing = false;
+		}
 	}
 
-	async function removeReport(reportId: number) {
-		if (!confirm(`Delete report #${reportId}?`)) return;
-		await deleteReport({ reportId });
+	async function handleQueueChanged(detail: {
+		message: string;
+		tone?: 'success' | 'warning' | 'danger';
+	}) {
+		queueFlashMessage = detail.message;
+		queueFlashTone = detail.tone ?? 'success';
 		await openReports.refresh();
 	}
 </script>
@@ -233,17 +244,32 @@
 					Open report queue
 				</h2>
 				<p class="text-sm text-slate-600">
-					Resolve or reject open citizen reports using the same redesigned queue cards.
+					Resolve opens the dispatch flow so zone and driver assignment happen before the report is sent out.
 				</p>
 			</div>
 			<button
 				type="button"
-				onclick={() => openReports.refresh()}
-				class="rounded-full border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-sky-900 hover:bg-sky-50"
+				onclick={refreshQueue}
+				disabled={queueRefreshing}
+				class="rounded-full border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-sky-900 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-60"
 			>
-				Refresh queue
+				{queueRefreshing ? 'Refreshing…' : 'Refresh queue'}
 			</button>
 		</div>
+
+		{#if queueFlashMessage}
+			<p
+				class={`rounded-[1.25rem] px-4 py-3 text-sm font-medium ${
+					queueFlashTone === 'danger'
+						? 'bg-rose-50 text-rose-700'
+						: queueFlashTone === 'warning'
+							? 'bg-amber-50 text-amber-700'
+							: 'bg-emerald-50 text-emerald-700'
+				}`}
+			>
+				{queueFlashMessage}
+			</p>
+		{/if}
 
 		{#if openReports.loading && !openReports.ready}
 			<p class="rounded-2xl bg-sky-50 px-4 py-10 text-sm text-slate-500">Loading reports…</p>
@@ -251,75 +277,13 @@
 			<p class="rounded-2xl bg-sky-50 px-4 py-10 text-sm text-slate-500">No open reports.</p>
 		{:else if openReports.ready}
 			<div class="grid gap-4 lg:grid-cols-2">
-				{#each openReports.current as report}
-					<article class="rounded-[1.6rem] border border-sky-100 bg-gradient-to-br from-white via-sky-50 to-cyan-50 p-4 shadow-[0_12px_28px_rgba(8,47,73,0.06)]">
-						<div class="flex flex-wrap items-start justify-between gap-3">
-							<div>
-								<div class="flex flex-wrap items-center gap-2">
-									<p class="text-sm font-semibold text-slate-900">
-										#{report.id} • {report.category.replace('_', ' ')}
-									</p>
-									<span class="rounded-full bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-700">
-										{report.status}
-									</span>
-								</div>
-								<p class="mt-3 text-sm leading-6 text-slate-700">{report.description}</p>
-							</div>
-
-							<div class="flex flex-wrap gap-2">
-								<button
-									type="button"
-									onclick={() => closeReport(report.id, 'resolved')}
-									class="rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-400"
-								>
-									Resolve
-								</button>
-								<button
-									type="button"
-									onclick={() => closeReport(report.id, 'rejected')}
-									class="rounded-full bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-400"
-								>
-									Reject
-								</button>
-								<button
-									type="button"
-									onclick={() => removeReport(report.id)}
-									class="rounded-full bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500"
-								>
-									Delete
-								</button>
-							</div>
-						</div>
-
-						<div class="mt-4 grid gap-3 sm:grid-cols-2">
-							<div class="rounded-[1.1rem] bg-white/80 px-3 py-3">
-								<p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Location</p>
-								<p class="mt-1 text-sm font-semibold text-slate-900">
-									{report.latitude.toFixed(5)}, {report.longitude.toFixed(5)}
-								</p>
-							</div>
-							<div class="rounded-[1.1rem] bg-white/80 px-3 py-3">
-								<p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Zone</p>
-								<p class="mt-1 text-sm font-semibold text-slate-900">{report.zoneName ?? 'Unassigned'}</p>
-							</div>
-						</div>
-
-						<div class="mt-4 flex flex-wrap items-center justify-between gap-3">
-							<p class="text-xs text-slate-500">
-								Submitted {new Date(report.createdAt).toLocaleString()}
-							</p>
-							{#if report.photoUrl}
-								<a
-									href={report.photoUrl}
-									target="_blank"
-									rel="noreferrer"
-									class="rounded-full border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-900 hover:bg-sky-50"
-								>
-									View photo
-								</a>
-							{/if}
-						</div>
-					</article>
+				{#each openReports.current as report (report.id)}
+					<AdminReportQueueCard
+						{report}
+						{drivers}
+						{zones}
+						onChanged={handleQueueChanged}
+					/>
 				{/each}
 			</div>
 		{/if}

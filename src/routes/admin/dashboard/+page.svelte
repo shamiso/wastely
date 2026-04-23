@@ -1,6 +1,12 @@
 <script lang="ts">
 	import InsightMap from '$lib/components/InsightMap.svelte';
 	import {
+		assignRun,
+		listDrivers,
+		listRuns,
+		runDispatch
+	} from '$lib/api/admin-dispatch.remote';
+	import {
 		citizenReportMap,
 		datasetHealth,
 		kpiSnapshot,
@@ -11,6 +17,12 @@
 	const demand = zoneDemand({});
 	const dataset = datasetHealth();
 	const reportMap = citizenReportMap();
+	const drivers = listDrivers();
+	const initialRunDate = new Date().toISOString().slice(0, 10);
+	let runDate = $state(initialRunDate);
+	let dispatchRuns = $state(listRuns({ runDate: initialRunDate }));
+	let wardId = $state('');
+	let lastDispatchResult = $state<{ runsCreated: number; stopsCreated: number } | null>(null);
 
 	function reportColor(status: string) {
 		if (status === 'resolved') {
@@ -31,6 +43,31 @@
 			color: '#9f1239',
 			fillColor: '#fb7185'
 		};
+	}
+
+	function loadDispatchRuns() {
+		dispatchRuns = listRuns({ runDate });
+	}
+
+	async function generateRoutes() {
+		const result = await runDispatch({
+			runDate,
+			wardId: wardId || undefined
+		});
+		lastDispatchResult = {
+			runsCreated: result.runsCreated,
+			stopsCreated: result.stopsCreated
+		};
+		loadDispatchRuns();
+		await Promise.all([kpis.refresh(), reportMap.refresh()]);
+	}
+
+	async function updateAssignment(runId: number, driverUserId: string) {
+		await assignRun({
+			runId,
+			driverUserId: driverUserId || null
+		});
+		loadDispatchRuns();
 	}
 
 	let queuePressure = $derived(
@@ -73,7 +110,14 @@
 					<button
 						type="button"
 						onclick={async () => {
-							await Promise.all([kpis.refresh(), demand.refresh(), dataset.refresh(), reportMap.refresh()]);
+							loadDispatchRuns();
+							await Promise.all([
+								kpis.refresh(),
+								demand.refresh(),
+								dataset.refresh(),
+								reportMap.refresh(),
+								drivers.refresh()
+							]);
 						}}
 						class="rounded-full bg-white px-5 py-3 text-sm font-semibold text-sky-950 hover:bg-sky-50"
 					>
@@ -209,6 +253,135 @@
 					<p class="mt-2 text-3xl font-semibold text-slate-900">{kpis.ready ? `${kpis.current.totalDistanceKm.toFixed(1)} km` : '...'}</p>
 				</div>
 			</div>
+		</article>
+	</section>
+
+	<section class="grid gap-6 xl:grid-cols-[0.84fr_1.16fr]">
+		<article class="rounded-[2rem] border border-white/70 bg-white/88 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<div>
+					<p class="text-xs font-semibold uppercase tracking-[0.18em] text-teal-700">Officer controls</p>
+					<h2 class="mt-2 font-[Georgia] text-3xl font-semibold tracking-tight text-sky-950">
+						Generate and assign runs
+					</h2>
+				</div>
+				<div class="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
+					Municipal officer
+				</div>
+			</div>
+
+			<div class="mt-5 grid gap-4">
+				<label class="text-sm font-medium text-slate-700">
+					Run date
+					<input
+						type="date"
+						bind:value={runDate}
+						class="mt-2 w-full rounded-[1.2rem] border border-sky-100 bg-sky-50 px-4 py-3 outline-none ring-sky-300 focus:ring"
+					/>
+				</label>
+				<label class="text-sm font-medium text-slate-700">
+					Ward ID
+					<input
+						type="number"
+						bind:value={wardId}
+						placeholder="Optional"
+						class="mt-2 w-full rounded-[1.2rem] border border-sky-100 bg-sky-50 px-4 py-3 outline-none ring-sky-300 focus:ring"
+					/>
+				</label>
+
+				<div class="flex flex-wrap gap-3">
+					<button
+						type="button"
+						onclick={generateRoutes}
+						class="rounded-full bg-sky-950 px-5 py-3 text-sm font-semibold text-white hover:bg-sky-900"
+					>
+						Run optimizer
+					</button>
+					<button
+						type="button"
+						onclick={loadDispatchRuns}
+						class="rounded-full border border-sky-200 bg-white px-5 py-3 text-sm font-semibold text-sky-900 hover:bg-sky-50"
+					>
+						Load runs
+					</button>
+				</div>
+
+				{#if lastDispatchResult}
+					<div class="rounded-[1.35rem] bg-gradient-to-r from-emerald-50 to-cyan-50 p-4">
+						<p class="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
+							Last optimization
+						</p>
+						<p class="mt-2 text-lg font-semibold text-slate-900">
+							{lastDispatchResult.runsCreated} runs and {lastDispatchResult.stopsCreated} stops created
+						</p>
+						<p class="mt-1 text-sm text-slate-600">For {runDate}.</p>
+					</div>
+				{/if}
+			</div>
+		</article>
+
+		<article class="rounded-[2rem] border border-white/70 bg-white/88 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<div>
+					<p class="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">Run assignment board</p>
+					<h2 class="mt-2 font-[Georgia] text-3xl font-semibold tracking-tight text-sky-950">
+						Assign runs to drivers
+					</h2>
+				</div>
+				<div class="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">
+					{dispatchRuns.ready ? `${dispatchRuns.current.length} runs` : 'Loading'}
+				</div>
+			</div>
+
+			{#if dispatchRuns.loading && !dispatchRuns.ready}
+				<p class="mt-5 rounded-2xl bg-sky-50 px-4 py-10 text-sm text-slate-500">Loading runs…</p>
+			{:else if dispatchRuns.ready && dispatchRuns.current.length === 0}
+				<p class="mt-5 rounded-2xl bg-sky-50 px-4 py-10 text-sm text-slate-500">
+					No runs loaded for {runDate} yet.
+				</p>
+			{:else if dispatchRuns.ready}
+				<div class="mt-5 grid gap-4">
+					{#each dispatchRuns.current.slice(0, 6) as run}
+						<div class="rounded-[1.5rem] border border-sky-100 bg-gradient-to-br from-white to-sky-50 p-4">
+							<div class="flex flex-wrap items-start justify-between gap-4">
+								<div class="space-y-2">
+									<div class="flex flex-wrap items-center gap-2">
+										<p class="text-base font-semibold text-slate-900">Run #{run.id}</p>
+										<span class="rounded-full bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-700">
+											{run.status}
+										</span>
+									</div>
+									<p class="text-sm text-slate-600">
+										{run.stopCount} stops • {run.plannedDistanceKm.toFixed(1)} km • {run.estimatedDurationMinutes.toFixed(0)} min
+									</p>
+									<p class="text-xs text-slate-500">
+										Currently assigned to {run.driverName ?? 'nobody yet'}
+									</p>
+								</div>
+
+								<label class="min-w-64 text-sm font-medium text-slate-700">
+									Assign driver
+									<select
+										value={run.driverUserId ?? ''}
+										onchange={(event) => updateAssignment(run.id, (event.currentTarget as HTMLSelectElement).value)}
+										disabled={run.status !== 'planned' || (drivers.loading && !drivers.ready)}
+										class="mt-2 w-full rounded-[1.1rem] border border-sky-100 bg-white px-4 py-3 outline-none ring-sky-300 focus:ring disabled:cursor-not-allowed disabled:opacity-50"
+									>
+										<option value="">Unassigned</option>
+										{#if drivers.ready}
+											{#each drivers.current as driver}
+												<option value={driver.userId}>
+													{driver.name} ({driver.email})
+												</option>
+											{/each}
+										{/if}
+									</select>
+								</label>
+							</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
 		</article>
 	</section>
 

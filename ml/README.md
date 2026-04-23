@@ -24,5 +24,7 @@ Aliases the service also accepts:
 Notebook:
 
 - Open `ml/notebooks/waste_volume_forecast.ipynb`
-- Start the app so `/api/ml/training-data` is reachable
+- Start the app with `pnpm dev` so `/api/ml/training-data` is reachable
 - Run the notebook cells to fetch data, train, evaluate, and save the model
+- If the app is not running, the notebook now falls back to built-in synthetic training rows instead of failing with `ConnectionRefusedError`
+- Optional: set `WASTELY_TRAINING_DATA_FILE` to a local JSON file containing either `{"rows": [...]}` or a raw row list
