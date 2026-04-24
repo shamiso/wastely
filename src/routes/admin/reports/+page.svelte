@@ -8,13 +8,78 @@
 		listZones
 	} from '$lib/api/admin-dispatch.remote';
 
+	type QueueFilter =
+		| 'all'
+		| 'open'
+		| 'in_review'
+		| 'assigned'
+		| 'rejected'
+		| 'resolved'
+		| 'deleted';
+
 	const reports = listAllReports();
 	const reportMap = citizenReportMap();
 	const drivers = listDrivers();
 	const zones = listZones();
+	const queueFilters = [
+		{ id: 'all', label: 'All' },
+		{ id: 'open', label: 'Open' },
+		{ id: 'in_review', label: 'In review' },
+		{ id: 'assigned', label: 'Assigned' },
+		{ id: 'rejected', label: 'Rejected' },
+		{ id: 'resolved', label: 'Resolved' },
+		{ id: 'deleted', label: 'Deleted' }
+	] as const satisfies ReadonlyArray<{ id: QueueFilter; label: string }>;
+
 	let refreshing = $state(false);
 	let flashMessage = $state('');
 	let flashTone = $state<'success' | 'warning' | 'danger'>('success');
+	let selectedQueueFilter = $state<QueueFilter>('all');
+
+	function sortReports<T extends { updatedAt: number; createdAt: number }>(items: T[] | undefined) {
+		return [...(items ?? [])].sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt);
+	}
+
+	function isAssignedReport(report: {
+		assignedDriverUserId: string | null;
+		assignedRunId: number | null;
+	}) {
+		return Boolean(report.assignedDriverUserId && report.assignedRunId);
+	}
+
+	const sortedReports = $derived.by(() => sortReports(reports.current));
+
+	const filteredReports = $derived.by(() => {
+		if (selectedQueueFilter === 'all') return sortedReports;
+		if (selectedQueueFilter === 'assigned') {
+			return sortedReports.filter((report) => isAssignedReport(report));
+		}
+		return sortedReports.filter((report) => report.status === selectedQueueFilter);
+	});
+
+	const filterCounts = $derived.by(() => {
+		const counts: Record<QueueFilter, number> = {
+			all: 0,
+			open: 0,
+			in_review: 0,
+			assigned: 0,
+			rejected: 0,
+			resolved: 0,
+			deleted: 0
+		};
+
+		for (const report of sortedReports) {
+			counts.all += 1;
+			if (report.status === 'open') counts.open += 1;
+			if (report.status === 'in_review') counts.in_review += 1;
+			if (isAssignedReport(report)) counts.assigned += 1;
+			if (report.status === 'rejected') counts.rejected += 1;
+			if (report.status === 'resolved') counts.resolved += 1;
+			if (report.status === 'deleted') counts.deleted += 1;
+		}
+
+		return counts;
+	});
 
 	function reportColor(status: string) {
 		if (status === 'resolved') return '#34d399';
@@ -163,17 +228,39 @@
 				</p>
 			</div>
 			<div class="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
-				{reports.ready ? `${reports.current.length} reports` : 'Loading'}
+				{reports.ready ? `${filteredReports.length} shown` : 'Loading'}
 			</div>
+		</div>
+
+		<div class="flex flex-wrap gap-2">
+			{#each queueFilters as filter}
+				<button
+					type="button"
+					onclick={() => {
+						selectedQueueFilter = filter.id;
+					}}
+					class={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+						selectedQueueFilter === filter.id
+							? 'bg-sky-950 text-white shadow-lg'
+							: 'border border-sky-200 bg-white text-sky-900 hover:bg-sky-50'
+					}`}
+				>
+					{filter.label} ({filterCounts[filter.id]})
+				</button>
+			{/each}
 		</div>
 
 		{#if reports.loading && !reports.ready}
 			<p class="rounded-2xl bg-sky-50 px-4 py-10 text-sm text-slate-500">Loading reports…</p>
-		{:else if reports.ready && reports.current.length === 0}
+		{:else if reports.ready && sortedReports.length === 0}
 			<p class="rounded-2xl bg-sky-50 px-4 py-10 text-sm text-slate-500">No reports in queue.</p>
+		{:else if reports.ready && filteredReports.length === 0}
+			<p class="rounded-2xl bg-sky-50 px-4 py-10 text-sm text-slate-500">
+				No {queueFilters.find((filter) => filter.id === selectedQueueFilter)?.label.toLowerCase()} reports.
+			</p>
 		{:else if reports.ready}
 			<div class="grid gap-4 lg:grid-cols-2">
-				{#each reports.current as report (report.id)}
+				{#each filteredReports as report (report.id)}
 					<AdminReportQueueCard
 						{report}
 						{drivers}

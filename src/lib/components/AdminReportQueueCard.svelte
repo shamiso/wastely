@@ -15,7 +15,13 @@
 		zoneId: number | null;
 		zoneName: string | null;
 		createdAt: number;
+		updatedAt: number;
 		photoUrl: string | null;
+		assignedRunId: number | null;
+		assignedRunDate: string | null;
+		assignedRunStatus: 'planned' | 'in_progress' | 'completed' | 'blocked' | null;
+		assignedDriverUserId: string | null;
+		assignedDriverName: string | null;
 	};
 
 	type DriverOption = {
@@ -57,6 +63,7 @@
 	let resolveOpen = $state(false);
 	let selectedZoneId = $state('');
 	let selectedDriverUserId = $state('');
+	let selectedRunDate = $state(new Date().toISOString().slice(0, 10));
 	let formMessage = $state('');
 	let assigning = $state(false);
 	let rejecting = $state(false);
@@ -65,12 +72,23 @@
 	let currentZoneId = $state<number | null>(null);
 	let currentDriverName = $state<string | null>(null);
 	let currentDriverUserId = $state<string | null>(null);
-	let currentStatus = $state(report.status);
+	let currentRunId = $state<number | null>(null);
+	let currentRunDate = $state<string | null>(null);
+	let currentRunStatus = $state<'planned' | 'in_progress' | 'completed' | 'blocked' | null>(null);
+	let currentStatus = $state('');
+	const actionableStatuses = new Set(['open', 'in_review', 'rejected']);
 
 	$effect(() => {
 		selectedZoneId = report.zoneId ? String(report.zoneId) : '';
+		selectedDriverUserId = report.assignedDriverUserId ?? '';
+		selectedRunDate = report.assignedRunDate ?? new Date().toISOString().slice(0, 10);
 		currentZoneName = report.zoneName;
 		currentZoneId = report.zoneId;
+		currentDriverName = report.assignedDriverName;
+		currentDriverUserId = report.assignedDriverUserId;
+		currentRunId = report.assignedRunId;
+		currentRunDate = report.assignedRunDate;
+		currentRunStatus = report.assignedRunStatus;
 		currentStatus = report.status;
 		formMessage = '';
 	});
@@ -106,6 +124,7 @@
 	}
 
 	function openResolve() {
+		if (!actionableStatuses.has(currentStatus)) return;
 		resolveOpen = !resolveOpen;
 		formMessage = '';
 		if (!selectedZoneId && report.zoneId) {
@@ -128,19 +147,23 @@
 			const result = await dispatchReport({
 				reportId: report.id,
 				zoneId: selectedZoneId || undefined,
-				driverUserId: selectedDriverUserId
+				driverUserId: selectedDriverUserId,
+				runDate: selectedRunDate
 			});
 			currentZoneName = result.zoneName;
 			currentZoneId = result.zoneId;
 			currentDriverName = result.driverName;
 			currentDriverUserId = result.driverUserId;
+			currentRunId = result.runId;
+			currentRunDate = result.runDate;
+			currentRunStatus = 'planned';
 			currentStatus = result.status;
 			selectedZoneId = String(result.zoneId);
 			selectedDriverUserId = result.driverUserId;
-			formMessage = `Assigned ${result.zoneName} to ${result.driverName} on run #${result.runId}.`;
+			formMessage = `Assigned ${result.zoneName} to ${result.driverName} for ${result.runDate} on run #${result.runId}.`;
 			resolveOpen = false;
 			await onChanged?.({
-				message: `Report #${report.id} moved to in review and assigned to ${result.driverName} on run #${result.runId}.`,
+				message: `Report #${report.id} moved to in review and was assigned to ${result.driverName} for ${result.runDate} on run #${result.runId}.`,
 				tone: 'success'
 			});
 		} catch (error) {
@@ -178,6 +201,7 @@
 
 		try {
 			await deleteReport({ reportId: report.id });
+			currentStatus = 'deleted';
 			await onChanged?.({
 				message: `Report #${report.id} was deleted.`,
 				tone: 'danger'
@@ -205,30 +229,34 @@
 		</div>
 
 		<div class="flex flex-wrap gap-2">
-			<button
-				type="button"
-				onclick={openResolve}
-				disabled={assigning || rejecting || deleting}
-				class="rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-			>
-				{resolveOpen ? 'Close resolve' : 'Resolve'}
-			</button>
-			<button
-				type="button"
-				onclick={handleReject}
-				disabled={assigning || rejecting || deleting}
-				class="rounded-full bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
-			>
-				{rejecting ? 'Rejecting…' : 'Reject'}
-			</button>
-			<button
-				type="button"
-				onclick={handleDelete}
-				disabled={assigning || rejecting || deleting}
-				class="rounded-full bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-60"
-			>
-				{deleting ? 'Deleting…' : 'Delete'}
-			</button>
+			{#if actionableStatuses.has(currentStatus)}
+				<button
+					type="button"
+					onclick={openResolve}
+					disabled={assigning || rejecting || deleting}
+					class="rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+				>
+					{resolveOpen ? 'Close assign' : currentDriverUserId ? 'Reassign' : 'Assign'}
+				</button>
+				<button
+					type="button"
+					onclick={handleReject}
+					disabled={assigning || rejecting || deleting}
+					class="rounded-full bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+				>
+					{rejecting ? 'Rejecting…' : 'Reject'}
+				</button>
+			{/if}
+			{#if currentStatus !== 'deleted'}
+				<button
+					type="button"
+					onclick={handleDelete}
+					disabled={assigning || rejecting || deleting}
+					class="rounded-full bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-60"
+				>
+					{deleting ? 'Deleting…' : 'Delete'}
+				</button>
+			{/if}
 		</div>
 	</div>
 
@@ -252,7 +280,22 @@
 				{currentDriverName ?? 'No driver assigned yet'}
 			</p>
 			<p class="mt-1 text-xs text-slate-500">
-				{currentDriverUserId ? `Assigned driver id ${currentDriverUserId}` : 'Assign a driver in the resolve workflow to create or update the run.'}
+				{#if currentDriverUserId}
+					Assigned driver id {currentDriverUserId}
+					{#if currentRunId}
+						• Run #{currentRunId}
+					{/if}
+					{#if currentRunDate}
+						• {currentRunDate}
+					{/if}
+					{#if currentRunStatus}
+						• {currentRunStatus}
+					{/if}
+				{:else if currentStatus === 'in_review'}
+					In review, but no driver is attached to the route yet.
+				{:else}
+					Assign a driver in the resolve workflow to create or update the run.
+				{/if}
 			</p>
 		</div>
 	</div>
@@ -265,7 +308,7 @@
 						Resolve workflow
 					</p>
 					<p class="mt-1 text-sm text-slate-600">
-						The zone is pulled from the citizen's pinned location when available. Adjust it only if you need an override, then assign the driver.
+						The zone is pulled from the citizen's pinned location when available. Adjust it only if you need an override, then assign the driver and collection date.
 					</p>
 				</div>
 				<div class="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
@@ -273,7 +316,7 @@
 				</div>
 			</div>
 
-			<div class="mt-4 grid gap-3 md:grid-cols-2">
+			<div class="mt-4 grid gap-3 md:grid-cols-3">
 				<label class="text-sm font-medium text-slate-700">
 					Zone
 					<select
@@ -307,6 +350,16 @@
 						{/if}
 					</select>
 				</label>
+
+				<label class="text-sm font-medium text-slate-700">
+					Collection date
+					<input
+						bind:value={selectedRunDate}
+						type="date"
+						disabled={assigning}
+						class="mt-2 w-full rounded-[1.1rem] border border-sky-100 bg-sky-50 px-4 py-3 outline-none ring-sky-300 focus:ring disabled:cursor-not-allowed disabled:opacity-60"
+					/>
+				</label>
 			</div>
 
 			<div class="mt-4 flex flex-wrap items-center gap-3">
@@ -316,7 +369,7 @@
 					disabled={assigning || (zones.loading && !zones.ready) || (drivers.loading && !drivers.ready)}
 					class="rounded-full bg-sky-950 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
 				>
-					{assigning ? 'Assigning run…' : 'Assign zone and driver'}
+					{assigning ? 'Assigning run…' : 'Assign zone, driver and date'}
 				</button>
 				{#if zones.loading && !zones.ready}
 					<p class="text-xs font-semibold uppercase tracking-[0.14em] text-sky-700">Loading zones…</p>
@@ -337,9 +390,19 @@
 		</div>
 	{/if}
 
+	{#if currentStatus === 'resolved'}
+		<p class="mt-4 rounded-[1rem] bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+			This report has already been resolved.
+		</p>
+	{:else if currentStatus === 'deleted'}
+		<p class="mt-4 rounded-[1rem] bg-rose-50 px-3 py-2 text-sm text-rose-700">
+			This report has been deleted and is kept here for record-keeping only.
+		</p>
+	{/if}
+
 	<div class="mt-4 flex flex-wrap items-center justify-between gap-3">
 		<p class="text-xs text-slate-500">
-			Submitted {new Date(report.createdAt).toLocaleString()}
+			Submitted {new Date(report.createdAt).toLocaleString()} • Updated {new Date(report.updatedAt).toLocaleString()}
 		</p>
 		{#if report.photoUrl}
 			<a

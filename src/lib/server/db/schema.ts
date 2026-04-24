@@ -92,7 +92,7 @@ export const citizenReport = sqliteTable(
 		description: text('description').notNull(),
 		latitude: real('latitude').notNull(),
 		longitude: real('longitude').notNull(),
-		status: text('status', { enum: ['open', 'in_review', 'resolved', 'rejected'] })
+		status: text('status', { enum: ['open', 'in_review', 'resolved', 'rejected', 'deleted'] })
 			.notNull()
 			.default('open'),
 		createdAt: integer('created_at').notNull().$defaultFn(now),

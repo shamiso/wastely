@@ -1,15 +1,16 @@
 import { desc, eq, inArray } from 'drizzle-orm';
 import { error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { citizenReport, reportPhoto, zone } from '$lib/server/db/schema';
+import { citizenReport, reportPhoto, routeRun, routeStop, user, zone } from '$lib/server/db/schema';
 import { resolveZoneFromCoordinates } from '$lib/server/services/geo.service';
 import { buildPublicUrl, uploadReportPhoto } from '$lib/server/services/storage.service';
 
 const reportCategories = ['uncollected', 'illegal_dumping', 'overflowing_bin', 'other'] as const;
-const reportStatuses = ['open', 'in_review', 'resolved', 'rejected'] as const;
+const reportStatuses = ['open', 'in_review', 'resolved', 'rejected', 'deleted'] as const;
 
 export type ReportCategory = (typeof reportCategories)[number];
 export type ReportStatus = (typeof reportStatuses)[number];
+export type RouteRunStatus = 'planned' | 'in_progress' | 'completed' | 'blocked';
 
 export type ReportWithPhoto = {
 	id: number;
@@ -24,6 +25,11 @@ export type ReportWithPhoto = {
 	createdAt: number;
 	updatedAt: number;
 	photoUrl: string | null;
+	assignedRunId: number | null;
+	assignedRunDate: string | null;
+	assignedRunStatus: RouteRunStatus | null;
+	assignedDriverUserId: string | null;
+	assignedDriverName: string | null;
 };
 
 type CreateReportInput = {
@@ -45,11 +51,19 @@ function normalizeCategory(category: string): ReportCategory {
 	throw error(400, 'Invalid category');
 }
 
+type ReportAssignment = {
+	assignedRunId: number | null;
+	assignedRunDate: string | null;
+	assignedRunStatus: RouteRunStatus | null;
+	assignedDriverUserId: string | null;
+	assignedDriverName: string | null;
+};
+
 function toReportWithPhoto(row: {
 	report: typeof citizenReport.$inferSelect;
 	photo: typeof reportPhoto.$inferSelect | null;
 	zone: typeof zone.$inferSelect | null;
-}): ReportWithPhoto {
+}, assignment?: ReportAssignment): ReportWithPhoto {
 	return {
 		id: row.report.id,
 		reporterUserId: row.report.reporterUserId,
@@ -62,8 +76,46 @@ function toReportWithPhoto(row: {
 		zoneName: row.zone?.name ?? null,
 		createdAt: row.report.createdAt,
 		updatedAt: row.report.updatedAt,
-		photoUrl: row.photo ? buildPublicUrl(row.photo.objectKey) : null
+		photoUrl: row.photo ? buildPublicUrl(row.photo.objectKey) : null,
+		assignedRunId: assignment?.assignedRunId ?? null,
+		assignedRunDate: assignment?.assignedRunDate ?? null,
+		assignedRunStatus: assignment?.assignedRunStatus ?? null,
+		assignedDriverUserId: assignment?.assignedDriverUserId ?? null,
+		assignedDriverName: assignment?.assignedDriverName ?? null
 	};
+}
+
+async function listAssignmentsByReportId(reportIds: number[]) {
+	if (reportIds.length === 0) return new Map<number, ReportAssignment>();
+
+	const rows = await db
+		.select({
+			reportId: routeStop.sourceReportId,
+			runId: routeRun.id,
+			runDate: routeRun.runDate,
+			runStatus: routeRun.status,
+			driverUserId: routeRun.driverUserId,
+			driverName: user.name
+		})
+		.from(routeStop)
+		.innerJoin(routeRun, eq(routeStop.routeRunId, routeRun.id))
+		.leftJoin(user, eq(routeRun.driverUserId, user.id))
+		.where(inArray(routeStop.sourceReportId, reportIds))
+		.orderBy(desc(routeRun.createdAt), desc(routeStop.createdAt));
+
+	const assignments = new Map<number, ReportAssignment>();
+	for (const row of rows) {
+		if (row.reportId === null || assignments.has(row.reportId)) continue;
+		assignments.set(row.reportId, {
+			assignedRunId: row.runId,
+			assignedRunDate: row.runDate,
+			assignedRunStatus: row.runStatus as RouteRunStatus,
+			assignedDriverUserId: row.driverUserId,
+			assignedDriverName: row.driverName
+		});
+	}
+
+	return assignments;
 }
 
 export async function createCitizenReport(input: CreateReportInput): Promise<ReportWithPhoto> {
@@ -130,7 +182,8 @@ export async function listReportsByUser(userId: string): Promise<ReportWithPhoto
 		.where(eq(citizenReport.reporterUserId, userId))
 		.orderBy(desc(citizenReport.createdAt));
 
-	return rows.map(toReportWithPhoto);
+	const assignments = await listAssignmentsByReportId(rows.map((row) => row.report.id));
+	return rows.map((row) => toReportWithPhoto(row, assignments.get(row.report.id)));
 }
 
 export async function listOpenCitizenReports(): Promise<ReportWithPhoto[]> {
@@ -146,7 +199,8 @@ export async function listOpenCitizenReports(): Promise<ReportWithPhoto[]> {
 		.where(inArray(citizenReport.status, ['open', 'in_review']))
 		.orderBy(desc(citizenReport.createdAt));
 
-	return rows.map(toReportWithPhoto);
+	const assignments = await listAssignmentsByReportId(rows.map((row) => row.report.id));
+	return rows.map((row) => toReportWithPhoto(row, assignments.get(row.report.id)));
 }
 
 export async function listAllCitizenReports(): Promise<ReportWithPhoto[]> {
@@ -161,7 +215,8 @@ export async function listAllCitizenReports(): Promise<ReportWithPhoto[]> {
 		.leftJoin(zone, eq(citizenReport.zoneId, zone.id))
 		.orderBy(desc(citizenReport.createdAt));
 
-	return rows.map(toReportWithPhoto);
+	const assignments = await listAssignmentsByReportId(rows.map((row) => row.report.id));
+	return rows.map((row) => toReportWithPhoto(row, assignments.get(row.report.id)));
 }
 
 export async function resolveCitizenReport(reportId: number, status: ReportStatus = 'resolved') {
@@ -221,7 +276,11 @@ export async function updateCitizenReport(input: {
 
 export async function deleteCitizenReport(reportId: number) {
 	const [deleted] = await db
-		.delete(citizenReport)
+		.update(citizenReport)
+		.set({
+			status: 'deleted',
+			updatedAt: Date.now()
+		})
 		.where(eq(citizenReport.id, reportId))
 		.returning();
 
@@ -242,5 +301,7 @@ export async function getReportById(reportId: number): Promise<ReportWithPhoto |
 		.where(eq(citizenReport.id, reportId))
 		.limit(1);
 
-	return row ? toReportWithPhoto(row) : null;
+	if (!row) return null;
+	const assignments = await listAssignmentsByReportId([row.report.id]);
+	return toReportWithPhoto(row, assignments.get(row.report.id));
 }

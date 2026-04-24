@@ -1,42 +1,44 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { createReport } from '$lib/api/citizen-reports.remote';
-	import { detectZone, searchAddresses } from '$lib/api/geo.remote';
-	import LocationPickerMap from '$lib/components/LocationPickerMap.svelte';
+	import { createReport } from "$lib/api/citizen-reports.remote";
+	import { detectZone, searchAddresses } from "$lib/api/geo.remote";
+	import LocationPickerMap from "$lib/components/LocationPickerMap.svelte";
+	import { onMount } from "svelte";
 
 	type AddressOption = {
 		label: string;
 		latitude: number;
 		longitude: number;
-		source: 'history' | 'collection_point' | 'zone' | 'nominatim';
+		source: "history" | "collection_point" | "zone" | "nominatim";
 		zoneId: number | null;
 		zoneName: string | null;
-		zoneConfidence: 'high' | 'medium' | 'low' | null;
+		zoneConfidence: "high" | "medium" | "low" | null;
 	};
 
 	type AssignedZone = {
 		zoneId: number | null;
 		zoneName: string | null;
-		zoneConfidence: 'high' | 'medium' | 'low' | null;
+		zoneConfidence: "high" | "medium" | "low" | null;
 	};
 
-	const addressHistoryStorageKey = 'wastely-citizen-address-history';
+	const addressHistoryStorageKey = "wastely-citizen-address-history";
 
 	let latitude = $state<number | null>(null);
 	let longitude = $state<number | null>(null);
-	let addressQuery = $state('');
+	let addressQuery = $state("");
 	let addressHistory = $state<AddressOption[]>([]);
 	let addressResults = $state<AddressOption[]>([]);
 	let assignedZone = $state<AssignedZone | null>(null);
-	let searchError = $state('');
+	let searchError = $state("");
 	let searching = $state(false);
 	let resolvingZone = $state(false);
-	let zoneHint = $state('Choose a location and the zone will be selected automatically.');
+	let zoneHint = $state(
+		"Choose a location and the zone will be selected automatically.",
+	);
 	let lastSubmittedReportId = $state<number | null>(null);
 	let hasLocation = $derived(latitude !== null && longitude !== null);
 
 	function readHistory(): AddressOption[] {
-		if (typeof localStorage === 'undefined') return [];
+		if (typeof localStorage === "undefined") return [];
 
 		try {
 			const raw = localStorage.getItem(addressHistoryStorageKey);
@@ -49,7 +51,7 @@
 	}
 
 	function persistHistory(entries: AddressOption[]) {
-		if (typeof localStorage === 'undefined') return;
+		if (typeof localStorage === "undefined") return;
 		localStorage.setItem(addressHistoryStorageKey, JSON.stringify(entries));
 	}
 
@@ -61,8 +63,8 @@
 				(candidate) =>
 					candidate.label.trim().toLowerCase() !== normalizedLabel ||
 					candidate.latitude !== entry.latitude ||
-					candidate.longitude !== entry.longitude
-			)
+					candidate.longitude !== entry.longitude,
+			),
 		].slice(0, 6);
 
 		addressHistory = nextEntries;
@@ -76,32 +78,36 @@
 		assignedZone = {
 			zoneId: entry.zoneId,
 			zoneName: entry.zoneName,
-			zoneConfidence: entry.zoneConfidence
+			zoneConfidence: entry.zoneConfidence,
 		};
 		addressResults = [];
-		searchError = '';
+		searchError = "";
 		zoneHint = entry.zoneName
 			? `Zone matched from the selected location.`
-			: 'Location selected. Resolving the closest waste zone…';
+			: "Location selected. Resolving the closest waste zone…";
 		rememberAddress(entry);
 	}
 
 	async function lookupAddress() {
-		searchError = '';
+		searchError = "";
 		addressResults = [];
 
 		if (!addressQuery.trim()) {
-			searchError = 'Enter an address, suburb, landmark, or street first.';
+			searchError =
+				"Enter an address, suburb, landmark, or street first.";
 			return;
 		}
 
 		searching = true;
 		try {
-			const results = (await searchAddresses({ query: addressQuery })) as AddressOption[];
+			const results = (await searchAddresses({
+				query: addressQuery,
+			})) as AddressOption[];
 			addressResults = results;
 
 			if (results.length === 0) {
-				searchError = 'No address matches found. Try a broader landmark or suburb.';
+				searchError =
+					"No address matches found. Try a broader landmark or suburb.";
 			} else if (results.length === 1) {
 				applyAddressSelection(results[0]);
 			}
@@ -117,19 +123,19 @@
 		try {
 			const result = await detectZone({
 				latitude: latitude as number,
-				longitude: longitude as number
+				longitude: longitude as number,
 			});
 
 			assignedZone = result
 				? {
 						zoneId: result.zoneId,
 						zoneName: result.zoneName,
-						zoneConfidence: result.confidence
+						zoneConfidence: result.confidence,
 					}
 				: null;
 			zoneHint = result
 				? `Zone selected automatically from the map point.`
-				: 'No nearby zone could be inferred from that location yet.';
+				: "No nearby zone could be inferred from that location yet.";
 		} finally {
 			resolvingZone = false;
 		}
@@ -140,25 +146,34 @@
 	});
 
 	$effect(() => {
-		const reportId = createReport.result?.ok ? createReport.result.report.id : null;
-		if (!reportId || reportId === lastSubmittedReportId || !hasLocation || !addressQuery.trim()) return;
+		const reportId = createReport.result?.ok
+			? createReport.result.report.id
+			: null;
+		if (
+			!reportId ||
+			reportId === lastSubmittedReportId ||
+			!hasLocation ||
+			!addressQuery.trim()
+		)
+			return;
 
 		lastSubmittedReportId = reportId;
 		rememberAddress({
 			label: addressQuery.trim(),
 			latitude: latitude as number,
 			longitude: longitude as number,
-			source: 'history',
+			source: "history",
 			zoneId: assignedZone?.zoneId ?? null,
 			zoneName: assignedZone?.zoneName ?? null,
-			zoneConfidence: assignedZone?.zoneConfidence ?? null
+			zoneConfidence: assignedZone?.zoneConfidence ?? null,
 		});
 	});
 
 	$effect(() => {
 		if (!hasLocation) {
 			assignedZone = null;
-			zoneHint = 'Choose a location and the zone will be selected automatically.';
+			zoneHint =
+				"Choose a location and the zone will be selected automatically.";
 			return;
 		}
 		const timer = setTimeout(() => {
@@ -170,27 +185,26 @@
 </script>
 
 <div class="space-y-6">
-	<section class="overflow-hidden rounded-[2rem] bg-gradient-to-br from-cyan-500 via-sky-600 to-blue-700 p-6 text-white shadow-[0_24px_70px_rgba(8,47,73,0.16)]">
-		<p class="text-xs font-semibold uppercase tracking-[0.28em] text-white/70">Citizen reporting</p>
-		<h1 class="mt-2 font-[Georgia] text-4xl font-semibold tracking-tight">Pin the issue and send it fast</h1>
-		<p class="mt-3 max-w-2xl text-sm leading-6 text-white/82">
-			Search for the location, verify it on the map, attach a photo, and let the municipality know exactly where the waste issue is coming from.
-		</p>
-	</section>
-
 	<form {...createReport} class="space-y-6">
-		<section class="rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
+		<section
+			class="rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur"
+		>
 			<div class="flex flex-wrap items-start justify-between gap-4">
 				<div>
-					<h2 class="font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
+					<h2
+						class="font-[Georgia] text-2xl font-semibold tracking-tight text-emerald-950"
+					>
 						Find the location
 					</h2>
 					<p class="text-sm text-slate-600">
-						Use an address, suburb, or landmark to jump the map close to the incident.
+						Use an address, suburb, or landmark to jump the map
+						close to the incident.
 					</p>
 				</div>
 				{#if assignedZone?.zoneName}
-					<div class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
+					<div
+						class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700"
+					>
 						Zone {assignedZone.zoneName}
 					</div>
 				{/if}
@@ -203,31 +217,37 @@
 						bind:value={addressQuery}
 						name="addressQuery"
 						placeholder="Belvedere, Kuwadzana, Mbare, 14 Casterns"
-						class="w-full rounded-[1.2rem] border border-sky-100 bg-sky-50 px-4 py-3 outline-none ring-sky-300 focus:ring"
+						class="w-full rounded-[1.2rem] border border-emerald-100 bg-emerald-50 px-4 py-3 outline-none ring-emerald-300 focus:ring"
 					/>
 					<button
 						type="button"
 						onclick={lookupAddress}
 						disabled={searching}
-						class="rounded-[1.2rem] bg-sky-950 px-4 py-3 text-sm font-semibold text-white hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
+						class="rounded-[1.2rem] bg-emerald-950 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-60"
 					>
-						{searching ? 'Searching…' : 'Find address'}
+						{searching ? "Searching…" : "Find address"}
 					</button>
 				</div>
 				{#if searchError}
-					<p class="mt-2 text-xs font-semibold text-amber-700">{searchError}</p>
+					<p class="mt-2 text-xs font-semibold text-amber-700">
+						{searchError}
+					</p>
 				{/if}
 			</label>
 
 			{#if addressHistory.length > 0}
 				<div class="mt-5">
-					<p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Recent places</p>
+					<p
+						class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500"
+					>
+						Recent places
+					</p>
 					<div class="mt-3 flex flex-wrap gap-2">
 						{#each addressHistory as entry}
 							<button
 								type="button"
 								onclick={() => applyAddressSelection(entry)}
-								class="rounded-full border border-sky-100 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-900 hover:bg-sky-100"
+								class="rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-900 hover:bg-emerald-100"
 							>
 								{entry.label}
 							</button>
@@ -238,17 +258,25 @@
 
 			{#if addressResults.length > 1}
 				<div class="mt-5 space-y-3">
-					<p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Matched locations</p>
+					<p
+						class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500"
+					>
+						Matched locations
+					</p>
 					<div class="grid gap-3">
 						{#each addressResults as entry}
 							<button
 								type="button"
 								onclick={() => applyAddressSelection(entry)}
-								class="rounded-[1.35rem] border border-sky-100 bg-gradient-to-r from-white to-sky-50 px-4 py-4 text-left hover:border-sky-200"
+								class="rounded-[1.35rem] border border-emerald-100 bg-gradient-to-r from-white to-emerald-50 px-4 py-4 text-left hover:border-emerald-200"
 							>
-								<p class="text-sm font-semibold text-slate-900">{entry.label}</p>
+								<p class="text-sm font-semibold text-slate-900">
+									{entry.label}
+								</p>
 								<p class="mt-1 text-xs text-slate-500">
-									{entry.zoneName ? `${entry.zoneName} zone` : 'Zone will be inferred'} • {entry.source}
+									{entry.zoneName
+										? `${entry.zoneName} zone`
+										: "Zone will be inferred"} • {entry.source}
 								</p>
 							</button>
 						{/each}
@@ -257,15 +285,20 @@
 			{/if}
 		</section>
 
-		<section class="rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
+		<section
+			class="rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur"
+		>
 			<div class="grid gap-4 md:grid-cols-[1.1fr_0.9fr]">
 				<div class="space-y-4">
 					<div>
-						<h2 class="font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
+						<h2
+							class="font-[Georgia] text-2xl font-semibold tracking-tight text-emerald-950"
+						>
 							Issue details
 						</h2>
 						<p class="text-sm text-slate-600">
-							Add the type of waste issue and a short explanation for officers.
+							Add the type of waste issue and a short explanation
+							for officers.
 						</p>
 					</div>
 
@@ -274,11 +307,17 @@
 						<select
 							name="category"
 							required
-							class="mt-2 w-full rounded-[1.2rem] border border-sky-100 bg-sky-50 px-4 py-3 outline-none ring-sky-300 focus:ring"
+							class="mt-2 w-full rounded-[1.2rem] border border-emerald-100 bg-emerald-50 px-4 py-3 outline-none ring-emerald-300 focus:ring"
 						>
-							<option value="uncollected">Uncollected waste</option>
-							<option value="illegal_dumping">Illegal dumping</option>
-							<option value="overflowing_bin">Overflowing bin</option>
+							<option value="uncollected"
+								>Uncollected waste</option
+							>
+							<option value="illegal_dumping"
+								>Illegal dumping</option
+							>
+							<option value="overflowing_bin"
+								>Overflowing bin</option
+							>
 							<option value="other">Other</option>
 						</select>
 					</label>
@@ -290,7 +329,7 @@
 							required
 							rows="4"
 							placeholder="What happened and where exactly is it?"
-							class="mt-2 w-full rounded-[1.2rem] border border-sky-100 bg-sky-50 px-4 py-3 outline-none ring-sky-300 focus:ring"
+							class="mt-2 w-full rounded-[1.2rem] border border-emerald-100 bg-emerald-50 px-4 py-3 outline-none ring-emerald-300 focus:ring"
 						></textarea>
 					</label>
 
@@ -301,18 +340,29 @@
 							name="photo"
 							required
 							accept="image/*"
-							class="mt-2 block w-full rounded-[1.2rem] border border-sky-100 bg-sky-50 px-4 py-3 text-sm"
+							class="mt-2 block w-full rounded-[1.2rem] border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm"
 						/>
 					</label>
 				</div>
 
 				<div class="space-y-4">
-					<div class="rounded-[1.5rem] bg-gradient-to-br from-emerald-50 to-cyan-50 p-4">
-						<p class="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Assigned zone</p>
+					<div
+						class="rounded-[1.5rem] bg-gradient-to-br from-emerald-50 to-green-50 p-4"
+					>
+						<p
+							class="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700"
+						>
+							Assigned zone
+						</p>
 						{#if assignedZone?.zoneName}
-							<p class="mt-2 text-2xl font-semibold text-slate-900">{assignedZone.zoneName}</p>
+							<p
+								class="mt-2 text-2xl font-semibold text-slate-900"
+							>
+								{assignedZone.zoneName}
+							</p>
 							<p class="mt-2 text-sm text-slate-600">
-								Zone ID {assignedZone.zoneId} • Confidence {assignedZone.zoneConfidence ?? 'pending'}
+								Zone ID {assignedZone.zoneId} • Confidence {assignedZone.zoneConfidence ??
+									"pending"}
 							</p>
 						{:else}
 							<p class="mt-2 text-sm leading-6 text-slate-600">
@@ -321,21 +371,36 @@
 						{/if}
 					</div>
 
-					<div class="rounded-[1.5rem] bg-gradient-to-br from-amber-50 to-orange-50 p-4">
-						<p class="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">Map readiness</p>
+					<div
+						class="rounded-[1.5rem] bg-gradient-to-br from-amber-50 to-orange-50 p-4"
+					>
+						<p
+							class="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700"
+						>
+							Map readiness
+						</p>
 						{#if hasLocation}
-							<p class="mt-2 text-sm font-semibold text-slate-900">
+							<p
+								class="mt-2 text-sm font-semibold text-slate-900"
+							>
 								Latitude {latitude?.toFixed(6)}
 							</p>
-							<p class="mt-1 text-sm font-semibold text-slate-900">
+							<p
+								class="mt-1 text-sm font-semibold text-slate-900"
+							>
 								Longitude {longitude?.toFixed(6)}
 							</p>
-							<p class="mt-4 text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">
-								{resolvingZone ? 'Selecting zone automatically…' : 'Zone is selected automatically from the current pin'}
+							<p
+								class="mt-4 text-xs font-semibold uppercase tracking-[0.14em] text-amber-700"
+							>
+								{resolvingZone
+									? "Selecting zone automatically…"
+									: "Zone is selected automatically from the current pin"}
 							</p>
 						{:else}
 							<p class="mt-2 text-sm leading-6 text-slate-600">
-								Search for an address or tap the map to place the report location.
+								Search for an address or tap the map to place
+								the report location.
 							</p>
 						{/if}
 					</div>
@@ -343,18 +408,25 @@
 			</div>
 		</section>
 
-		<section class="rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
+		<section
+			class="rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur"
+		>
 			<div class="flex flex-wrap items-start justify-between gap-4">
 				<div>
-					<h2 class="font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
+					<h2
+						class="font-[Georgia] text-2xl font-semibold tracking-tight text-emerald-950"
+					>
 						Place the pin on the map
 					</h2>
 					<p class="text-sm text-slate-600">
-						Tap the exact spot of the issue so officers can see where reports are coming from.
+						Tap the exact spot of the issue so officers can see
+						where reports are coming from.
 					</p>
 				</div>
 				{#if hasLocation}
-					<div class="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
+					<div
+						class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700"
+					>
 						Location locked
 					</div>
 				{/if}
@@ -364,24 +436,32 @@
 				<LocationPickerMap bind:latitude bind:longitude />
 			</div>
 
-			<input type="hidden" name="latitude" value={latitude ?? ''} />
-			<input type="hidden" name="longitude" value={longitude ?? ''} />
-			<input type="hidden" name="zoneId" value={assignedZone?.zoneId ?? ''} />
+			<input type="hidden" name="latitude" value={latitude ?? ""} />
+			<input type="hidden" name="longitude" value={longitude ?? ""} />
+			<input
+				type="hidden"
+				name="zoneId"
+				value={assignedZone?.zoneId ?? ""}
+			/>
 
 			<div class="mt-5 flex flex-wrap items-center gap-3">
 				<button
 					type="submit"
 					disabled={!hasLocation || resolvingZone}
-					class="rounded-full bg-sky-950 px-5 py-3 text-sm font-semibold text-white hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
+					class="rounded-full bg-emerald-950 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-60"
 				>
-					{resolvingZone ? 'Selecting zone…' : 'Submit report'}
+					{resolvingZone ? "Selecting zone…" : "Submit report"}
 				</button>
 				{#if !hasLocation}
-					<p class="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">
+					<p
+						class="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700"
+					>
 						Select a map point before submitting
 					</p>
 				{:else if resolvingZone}
-					<p class="text-xs font-semibold uppercase tracking-[0.14em] text-sky-700">
+					<p
+						class="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700"
+					>
 						Holding submission until the zone is selected
 					</p>
 				{/if}
@@ -390,9 +470,12 @@
 	</form>
 
 	{#if createReport.result?.ok}
-		<section class="rounded-[1.6rem] border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+		<section
+			class="rounded-[1.6rem] border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800"
+		>
 			Report #{createReport.result.report.id} submitted successfully in
-			{createReport.result.report.zoneName ?? `zone ${createReport.result.report.zoneId ?? 'unassigned'}`}.
+			{createReport.result.report.zoneName ??
+				`zone ${createReport.result.report.zoneId ?? "unassigned"}`}.
 		</section>
 	{/if}
 </div>

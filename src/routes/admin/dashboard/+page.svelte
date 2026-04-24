@@ -88,6 +88,116 @@
 	);
 	let topForecastZone = $derived(demand.ready ? (demand.current[0] ?? null) : null);
 	let forecastCoverage = $derived(demand.ready ? demand.current.length : 0);
+
+	const serviceNodePositions = [
+		{ left: 12, top: 14 },
+		{ left: 63, top: 10 },
+		{ left: 79, top: 39 },
+		{ left: 58, top: 73 },
+		{ left: 22, top: 76 },
+		{ left: 6, top: 45 }
+	];
+	const serviceNodeAccents = [
+		{
+			shell: 'from-cyan-400/28 via-sky-500/22 to-blue-600/28',
+			border: 'border-cyan-200/70',
+			badge: 'bg-cyan-100 text-cyan-900',
+			glow: 'bg-cyan-300/28'
+		},
+		{
+			shell: 'from-emerald-300/28 via-teal-500/20 to-sky-500/26',
+			border: 'border-emerald-200/70',
+			badge: 'bg-emerald-100 text-emerald-900',
+			glow: 'bg-emerald-300/28'
+		},
+		{
+			shell: 'from-amber-200/28 via-orange-300/22 to-rose-300/22',
+			border: 'border-amber-200/70',
+			badge: 'bg-amber-100 text-amber-900',
+			glow: 'bg-amber-300/24'
+		},
+		{
+			shell: 'from-fuchsia-200/24 via-pink-300/20 to-rose-400/22',
+			border: 'border-fuchsia-200/70',
+			badge: 'bg-fuchsia-100 text-fuchsia-900',
+			glow: 'bg-fuchsia-300/24'
+		},
+		{
+			shell: 'from-sky-200/24 via-indigo-200/20 to-blue-300/24',
+			border: 'border-sky-200/70',
+			badge: 'bg-sky-100 text-sky-900',
+			glow: 'bg-sky-300/24'
+		},
+		{
+			shell: 'from-lime-200/24 via-emerald-200/20 to-teal-300/24',
+			border: 'border-lime-200/70',
+			badge: 'bg-lime-100 text-lime-900',
+			glow: 'bg-lime-300/24'
+		}
+	];
+
+	function spreadPins(
+		pins: Array<{
+			id: number;
+			latitude: number;
+			longitude: number;
+			zoneName: string | null;
+			category: string;
+			status: string;
+		}>
+	) {
+		const grouped = new Map<string, typeof pins>();
+
+		for (const pin of pins) {
+			const key = `${pin.latitude.toFixed(4)}:${pin.longitude.toFixed(4)}`;
+			const bucket = grouped.get(key) ?? [];
+			bucket.push(pin);
+			grouped.set(key, bucket);
+		}
+
+		return [...grouped.values()].flatMap((group) => {
+			if (group.length === 1) return group;
+
+			return group.map((pin, index) => {
+				const angle = (Math.PI * 2 * index) / group.length;
+				const offset = 0.0016 + index * 0.00022;
+				return {
+					...pin,
+					latitude: Number((pin.latitude + Math.sin(angle) * offset).toFixed(6)),
+					longitude: Number((pin.longitude + Math.cos(angle) * offset).toFixed(6))
+				};
+			});
+		});
+	}
+
+	let serviceFieldNodes = $derived(
+		reportMap.ready
+			? reportMap.current.volumesByZone.slice(0, 6).map((volume, index) => {
+					const forecast =
+						demand.ready
+							? demand.current.find((row) => row.zoneName === volume.zoneName) ?? null
+							: null;
+					return {
+						...volume,
+						predictedVolumeKg: forecast?.predictedVolumeKg ?? null,
+						confidence: forecast?.confidence ?? null,
+						position: serviceNodePositions[index % serviceNodePositions.length],
+						accent: serviceNodeAccents[index % serviceNodeAccents.length]
+					};
+				})
+			: []
+	);
+	let spreadReportPins = $derived(
+		reportMap.ready ? spreadPins(reportMap.current.pins) : []
+	);
+	let liveLoadCenter = $derived(
+		reportMap.ready
+			? {
+					value: queuePressure,
+					label: queuePressure > 0 ? 'Active load' : 'Queue clear'
+				}
+			: { value: 0, label: 'Loading live load' }
+	);
 </script>
 
 <div class="space-y-6">
@@ -168,13 +278,16 @@
 	</section>
 
 	<section class="grid gap-4 xl:grid-cols-[1.45fr_0.85fr_0.7fr]">
-		<article class="rounded-[2rem] border border-white/70 bg-white/88 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
+		<article class="rounded-[2rem] border border-white/70 bg-[linear-gradient(145deg,rgba(255,255,255,0.96),rgba(240,249,255,0.88))] p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
 			<div class="flex flex-wrap items-center justify-between gap-3">
 				<div>
-					<p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Citizen report map</p>
+					<p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Service field</p>
 					<h2 class="mt-2 font-[Georgia] text-3xl font-semibold tracking-tight text-sky-950">
-						Origin field
+						Live load constellation
 					</h2>
+					<p class="mt-2 max-w-xl text-sm leading-6 text-slate-600">
+						A roomier network view of the busiest zones, paired with a geographic map that now offsets crowded report pins instead of stacking them into a dead center blob.
+					</p>
 				</div>
 				{#if reportMap.ready}
 					<div class="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
@@ -183,16 +296,116 @@
 				{/if}
 			</div>
 
-			<div class="mt-4">
+			<div class="mt-5 grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
+				<div class="overflow-hidden rounded-[1.9rem] bg-[radial-gradient(circle_at_20%_20%,rgba(125,211,252,0.18),transparent_20%),radial-gradient(circle_at_80%_25%,rgba(45,212,191,0.16),transparent_18%),linear-gradient(160deg,#082f49_0%,#0f172a_52%,#134e4a_100%)] p-4 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+					<div class="flex items-start justify-between gap-3">
+						<div>
+							<p class="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Node spacing</p>
+							<p class="mt-2 text-lg font-semibold">Backlog, forecast, and zone urgency in one field</p>
+						</div>
+						<div class="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/72">
+							{serviceFieldNodes.length} nodes
+						</div>
+					</div>
+
+					<div class="relative mt-5 min-h-[26rem] overflow-hidden rounded-[1.6rem] border border-white/10 bg-white/6">
+						<div class="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.05)_1px,transparent_1px)] bg-[size:4.6rem_4.6rem] opacity-35"></div>
+						<div class="pointer-events-none absolute left-1/2 top-1/2 h-[16rem] w-[16rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-300/15"></div>
+						<div class="pointer-events-none absolute left-1/2 top-1/2 h-[23rem] w-[23rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-300/10"></div>
+
+						{#if serviceFieldNodes.length > 0}
+							{#each serviceFieldNodes as node, index}
+								<div
+									class="absolute h-px origin-left bg-gradient-to-r from-white/6 via-cyan-300/28 to-white/6"
+									style={`left: 50%; top: 50%; width: ${
+										index % 2 === 0 ? '10.5rem' : '9rem'
+									}; transform: rotate(${index * 60 - 18}deg);`}
+								></div>
+								<div
+									class={`absolute h-24 w-24 -translate-x-1/2 -translate-y-1/2 rounded-full blur-2xl ${node.accent.glow}`}
+									style={`left: ${node.position.left}%; top: ${node.position.top}%;`}
+								></div>
+								<div
+									class={`absolute w-[11.5rem] -translate-x-1/2 -translate-y-1/2 rounded-[1.45rem] border bg-gradient-to-br ${node.accent.shell} ${node.accent.border} p-3 shadow-[0_20px_50px_rgba(8,47,73,0.25)] backdrop-blur-md`}
+									style={`left: ${node.position.left}%; top: ${node.position.top}%;`}
+								>
+									<div class="flex items-start justify-between gap-3">
+										<div class="min-w-0">
+											<p class="truncate text-sm font-semibold text-white">{node.zoneName}</p>
+											<p class="mt-1 text-[11px] uppercase tracking-[0.18em] text-white/62">
+												{node.openCount} active • {node.resolvedCount} cleared
+											</p>
+										</div>
+										<div class={`rounded-full px-2 py-1 text-[11px] font-semibold ${node.accent.badge}`}>
+											{node.reportCount}
+										</div>
+									</div>
+									<div class="mt-3 flex items-end justify-between gap-3">
+										<div>
+											<p class="text-[10px] uppercase tracking-[0.18em] text-white/55">Forecast</p>
+											<p class="mt-1 text-sm font-semibold text-white">
+												{node.predictedVolumeKg !== null ? `${node.predictedVolumeKg.toFixed(0)}kg` : 'Pending'}
+											</p>
+										</div>
+										<div class="text-right">
+											<p class="text-[10px] uppercase tracking-[0.18em] text-white/55">Confidence</p>
+											<p class="mt-1 text-sm font-semibold text-white">
+												{node.confidence !== null ? `${(node.confidence * 100).toFixed(0)}%` : '--'}
+											</p>
+										</div>
+									</div>
+								</div>
+							{/each}
+
+							<div class="absolute left-1/2 top-1/2 w-[10.5rem] -translate-x-1/2 -translate-y-1/2 rounded-[2rem] border border-white/15 bg-white/10 p-4 text-center shadow-[0_24px_70px_rgba(8,47,73,0.28)] backdrop-blur-md">
+								<p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/58">
+									{liveLoadCenter.label}
+								</p>
+								{#if liveLoadCenter.value > 0}
+									<p class="mt-3 text-5xl font-semibold text-white">{liveLoadCenter.value}</p>
+									<p class="mt-2 text-xs text-white/66">Open plus in-review reports</p>
+								{:else}
+									<p class="mt-4 text-lg font-semibold text-white">No active pileup</p>
+									<p class="mt-2 text-xs text-white/66">Fresh reports will light this field up.</p>
+								{/if}
+							</div>
+						{:else}
+							<div class="absolute inset-0 grid place-items-center px-6 text-center">
+								<div class="max-w-sm rounded-[1.6rem] border border-white/12 bg-white/8 p-5 backdrop-blur">
+									<p class="text-lg font-semibold text-white">No zones are active yet</p>
+									<p class="mt-2 text-sm leading-6 text-white/70">
+										Once citizen reports arrive, this constellation will spread the busiest zones out instead of stacking them on top of each other.
+									</p>
+								</div>
+							</div>
+						{/if}
+					</div>
+				</div>
+
+				<div>
+					<div class="rounded-[1.6rem] border border-sky-100 bg-white/70 p-4 shadow-[0_18px_40px_rgba(8,47,73,0.08)]">
+						<div class="flex items-center justify-between gap-3">
+							<div>
+								<p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Geographic view</p>
+								<p class="mt-1 text-sm text-slate-600">Nearby report pins are now fanned out for readability.</p>
+							</div>
+							<div class="rounded-full bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+								Offset pin layout
+							</div>
+						</div>
+					</div>
+
+					<div class="mt-4">
 				{#if reportMap.loading && !reportMap.ready}
 					<p class="rounded-2xl bg-sky-50 px-4 py-10 text-sm text-slate-500">Loading report map…</p>
 				{:else if reportMap.ready && reportMap.current.pins.length > 0}
 					<InsightMap
 						ariaLabel="Citizen report map"
-						markers={reportMap.current.pins.map((pin) => ({
+						markers={spreadReportPins.map((pin) => ({
 							lat: pin.latitude,
 							lng: pin.longitude,
 							label: `${pin.zoneName ?? 'Unassigned'} • ${pin.category.replace('_', ' ')} • ${pin.status}`,
+							radius: pin.status === 'resolved' ? 8 : pin.status === 'in_review' ? 10 : 11,
 							...reportColor(pin.status)
 						}))}
 					/>
@@ -201,6 +414,8 @@
 						No citizen report locations available yet.
 					</p>
 				{/if}
+			</div>
+				</div>
 			</div>
 		</article>
 
@@ -342,18 +557,13 @@
 			{:else if dispatchRuns.ready}
 				<div class="mt-5 grid gap-4">
 					{#each dispatchRuns.current.slice(0, 6) as run}
-						<div class="rounded-[1.5rem] border border-sky-100 bg-gradient-to-br from-white to-sky-50 p-4">
+						<div class="rounded-[1.7rem] border border-sky-100 bg-[linear-gradient(155deg,rgba(255,255,255,1),rgba(240,249,255,0.95),rgba(237,233,254,0.42))] p-4 shadow-[0_18px_40px_rgba(8,47,73,0.08)]">
 							<div class="flex flex-wrap items-start justify-between gap-4">
 								<div class="space-y-2">
-									<div class="flex flex-wrap items-center gap-2">
-										<p class="text-base font-semibold text-slate-900">Run #{run.id}</p>
-										<span class="rounded-full bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-700">
-											{run.status}
-										</span>
-									</div>
-									<p class="text-sm text-slate-600">
-										{run.stopCount} stops • {run.plannedDistanceKm.toFixed(1)} km • {run.estimatedDurationMinutes.toFixed(0)} min
-									</p>
+									<p class="text-base font-semibold text-slate-900">Run #{run.id}</p>
+									<span class="inline-flex rounded-full bg-slate-950 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white">
+										{run.status} • {run.stopCount} stops • {run.plannedDistanceKm.toFixed(1)} km • {run.estimatedDurationMinutes.toFixed(0)} min
+									</span>
 									<p class="text-xs text-slate-500">
 										Currently assigned to {run.driverName ?? 'nobody yet'}
 									</p>

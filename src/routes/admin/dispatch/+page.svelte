@@ -2,14 +2,14 @@
 	import AdminReportQueueCard from '$lib/components/AdminReportQueueCard.svelte';
 	import {
 		assignRun,
+		listAllReports,
 		listDrivers,
 		listRuns,
 		listZones,
-		listOpenReports,
 		runDispatch
 	} from '$lib/api/admin-dispatch.remote';
 
-	const openReports = listOpenReports();
+	const reports = listAllReports();
 	const drivers = listDrivers();
 	const zones = listZones();
 	const initialRunDate = new Date().toISOString().slice(0, 10);
@@ -20,6 +20,21 @@
 	let queueRefreshing = $state(false);
 	let queueFlashMessage = $state('');
 	let queueFlashTone = $state<'success' | 'warning' | 'danger'>('success');
+	const unresolvedStatuses = new Set(['open', 'in_review', 'rejected']);
+
+	function sortReports<T extends { updatedAt: number; createdAt: number }>(items: T[] | undefined) {
+		return [...(items ?? [])].sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt);
+	}
+
+	let unresolvedReports = $derived(
+		sortReports(reports.current?.filter((report) => unresolvedStatuses.has(report.status)))
+	);
+	let resolvedReports = $derived(
+		sortReports(reports.current?.filter((report) => report.status === 'resolved'))
+	);
+	let deletedReports = $derived(
+		sortReports(reports.current?.filter((report) => report.status === 'deleted'))
+	);
 
 	function loadDispatchRuns() {
 		dispatchRuns = listRuns({ runDate });
@@ -35,7 +50,7 @@
 			stopsCreated: result.stopsCreated
 		};
 		loadDispatchRuns();
-		await openReports.refresh();
+		await reports.refresh();
 	}
 
 	async function updateAssignment(runId: number, driverUserId: string) {
@@ -49,7 +64,7 @@
 	async function refreshQueue() {
 		queueRefreshing = true;
 		try {
-			await Promise.all([openReports.refresh(), zones.refresh(), drivers.refresh()]);
+			await Promise.all([reports.refresh(), zones.refresh(), drivers.refresh()]);
 		} finally {
 			queueRefreshing = false;
 		}
@@ -61,7 +76,8 @@
 	}) {
 		queueFlashMessage = detail.message;
 		queueFlashTone = detail.tone ?? 'success';
-		await openReports.refresh();
+		await reports.refresh();
+		loadDispatchRuns();
 	}
 </script>
 
@@ -84,7 +100,7 @@
 						Generate daily runs
 					</h2>
 					<p class="text-sm text-slate-600">
-						Set the dispatch date and optional ward filter, then run the optimizer.
+						Set the collection date and optional ward filter, then generate the optimized pickup runs.
 					</p>
 				</div>
 				<div class="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
@@ -94,7 +110,7 @@
 
 			<div class="mt-5 grid gap-4">
 				<label class="text-sm font-medium text-slate-700">
-					Run date
+					Collection date
 					<input
 						type="date"
 						bind:value={runDate}
@@ -117,7 +133,7 @@
 						onclick={generateRoutes}
 						class="rounded-full bg-sky-950 px-5 py-3 text-sm font-semibold text-white hover:bg-sky-900"
 					>
-						Run optimizer
+						Generate runs
 					</button>
 					<button
 						type="button"
@@ -137,7 +153,7 @@
 							{lastDispatchResult.runsCreated} runs created
 						</p>
 						<p class="mt-1 text-sm text-slate-600">
-							{lastDispatchResult.stopsCreated} stops were generated for {runDate}.
+							{lastDispatchResult.stopsCreated} stops were generated for collection on {runDate}.
 						</p>
 					</div>
 				{/if}
@@ -223,8 +239,27 @@
 							</div>
 
 							<p class="mt-4 text-xs text-slate-500">
-								Created {new Date(run.createdAt).toLocaleString()}
+								Collection date {run.runDate} • Created {new Date(run.createdAt).toLocaleString()}
 							</p>
+							{#if run.stops.length > 0}
+								<div class="mt-4 rounded-[1.2rem] bg-white/75 p-3">
+									<p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+										Optimum route order
+									</p>
+									<div class="mt-3 grid gap-2 sm:grid-cols-2">
+										{#each run.stops as stop}
+											<div class="rounded-[1rem] bg-sky-50 px-3 py-2 text-sm text-slate-700">
+												<p class="font-semibold text-slate-900">
+													Stop {stop.sequence} • {stop.status}
+												</p>
+												<p class="mt-1 text-xs text-slate-500">
+													{stop.latitude.toFixed(5)}, {stop.longitude.toFixed(5)}
+												</p>
+											</div>
+										{/each}
+									</div>
+								</div>
+							{/if}
 							{#if run.status !== 'planned'}
 								<p class="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">
 									Only planned runs can be reassigned
@@ -241,10 +276,10 @@
 		<div class="flex flex-wrap items-center justify-between gap-3">
 			<div>
 				<h2 class="font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
-					Open report queue
+					Report queue by status
 				</h2>
 				<p class="text-sm text-slate-600">
-					Resolve opens the dispatch flow so zone and driver assignment happen before the report is sent out.
+					Assign zone, driver, and collection date for unresolved reports, while keeping resolved and deleted items visible for audit.
 				</p>
 			</div>
 			<button
@@ -271,20 +306,103 @@
 			</p>
 		{/if}
 
-		{#if openReports.loading && !openReports.ready}
+		{#if reports.loading && !reports.ready}
 			<p class="rounded-2xl bg-sky-50 px-4 py-10 text-sm text-slate-500">Loading reports…</p>
-		{:else if openReports.ready && openReports.current.length === 0}
-			<p class="rounded-2xl bg-sky-50 px-4 py-10 text-sm text-slate-500">No open reports.</p>
-		{:else if openReports.ready}
-			<div class="grid gap-4 lg:grid-cols-2">
-				{#each openReports.current as report (report.id)}
-					<AdminReportQueueCard
-						{report}
-						{drivers}
-						{zones}
-						onChanged={handleQueueChanged}
-					/>
-				{/each}
+		{:else if reports.ready && reports.current.length === 0}
+			<p class="rounded-2xl bg-sky-50 px-4 py-10 text-sm text-slate-500">No citizen reports yet.</p>
+		{:else if reports.ready}
+			<div class="space-y-6">
+				<section class="space-y-4">
+					<div class="flex flex-wrap items-center justify-between gap-3">
+						<div>
+							<h3 class="font-[Georgia] text-xl font-semibold tracking-tight text-sky-950">
+								Unresolved
+							</h3>
+							<p class="text-sm text-slate-600">
+								Open, in-review, or rejected reports that still need officer attention.
+							</p>
+						</div>
+						<div class="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">
+							{unresolvedReports.length} reports
+						</div>
+					</div>
+					{#if unresolvedReports.length === 0}
+						<p class="rounded-2xl bg-sky-50 px-4 py-6 text-sm text-slate-500">
+							No unresolved reports.
+						</p>
+					{:else}
+						<div class="grid gap-4 lg:grid-cols-2">
+							{#each unresolvedReports as report (report.id)}
+								<AdminReportQueueCard
+									{report}
+									{drivers}
+									{zones}
+									onChanged={handleQueueChanged}
+								/>
+							{/each}
+						</div>
+					{/if}
+				</section>
+
+				<section class="space-y-4">
+					<div class="flex flex-wrap items-center justify-between gap-3">
+						<div>
+							<h3 class="font-[Georgia] text-xl font-semibold tracking-tight text-sky-950">
+								Resolved
+							</h3>
+							<p class="text-sm text-slate-600">
+								Reports already completed in the field.
+							</p>
+						</div>
+						<div class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
+							{resolvedReports.length} reports
+						</div>
+					</div>
+					{#if resolvedReports.length === 0}
+						<p class="rounded-2xl bg-sky-50 px-4 py-6 text-sm text-slate-500">No resolved reports.</p>
+					{:else}
+						<div class="grid gap-4 lg:grid-cols-2">
+							{#each resolvedReports as report (report.id)}
+								<AdminReportQueueCard
+									{report}
+									{drivers}
+									{zones}
+									onChanged={handleQueueChanged}
+								/>
+							{/each}
+						</div>
+					{/if}
+				</section>
+
+				<section class="space-y-4">
+					<div class="flex flex-wrap items-center justify-between gap-3">
+						<div>
+							<h3 class="font-[Georgia] text-xl font-semibold tracking-tight text-sky-950">
+								Deleted
+							</h3>
+							<p class="text-sm text-slate-600">
+								Deleted reports are retained here instead of being removed from the system.
+							</p>
+						</div>
+						<div class="rounded-full bg-rose-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-rose-700">
+							{deletedReports.length} reports
+						</div>
+					</div>
+					{#if deletedReports.length === 0}
+						<p class="rounded-2xl bg-sky-50 px-4 py-6 text-sm text-slate-500">No deleted reports.</p>
+					{:else}
+						<div class="grid gap-4 lg:grid-cols-2">
+							{#each deletedReports as report (report.id)}
+								<AdminReportQueueCard
+									{report}
+									{drivers}
+									{zones}
+									onChanged={handleQueueChanged}
+								/>
+							{/each}
+						</div>
+					{/if}
+				</section>
 			</div>
 		{/if}
 	</section>

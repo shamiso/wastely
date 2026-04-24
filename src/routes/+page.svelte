@@ -1,5 +1,5 @@
 <section class="mx-auto max-w-5xl space-y-6">
-	<div class="overflow-hidden rounded-[2.2rem] bg-gradient-to-br from-sky-600 via-cyan-600 to-teal-600 p-8 text-white shadow-[0_24px_70px_rgba(8,47,73,0.16)]">
+	<div class="overflow-hidden rounded-[2.2rem] bg-gradient-to-br from-emerald-600 via-green-600 to-teal-600 p-8 text-white shadow-[0_24px_70px_rgba(5,46,22,0.16)]">
 		<p class="text-xs font-semibold uppercase tracking-[0.28em] text-white/70">Smart waste optimizer</p>
 		<h1 class="mt-3 max-w-3xl font-[Georgia] text-5xl font-semibold tracking-tight">
 			Wastely pilot control center
@@ -10,7 +10,7 @@
 		<div class="mt-6 flex flex-wrap gap-3">
 			<a
 				href="/login"
-				class="rounded-full bg-white px-5 py-3 text-sm font-semibold text-sky-950 hover:bg-sky-50"
+				class="rounded-full bg-white px-5 py-3 text-sm font-semibold text-emerald-950 hover:bg-emerald-50"
 			>
 				Continue to sign in
 			</a>
@@ -25,7 +25,7 @@
 
 	<div class="grid gap-4 md:grid-cols-3">
 		<article class="rounded-[1.6rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
-			<p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Citizen app</p>
+			<p class="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Citizen app</p>
 			<h2 class="mt-2 text-2xl font-semibold text-slate-900">Map-based reports</h2>
 			<p class="mt-3 text-sm leading-6 text-slate-600">
 				Pin exact waste issues, attach photos, and track report status in an installable mobile-first interface.

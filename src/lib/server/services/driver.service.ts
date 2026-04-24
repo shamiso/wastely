@@ -1,5 +1,11 @@
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, gte } from 'drizzle-orm';
 import { error } from '@sveltejs/kit';
+import {
+	estimateLegTravel,
+	optimizeRoute,
+	type RouteIssue,
+	type RoutePoint
+} from '$lib/domain/route-optimizer';
 import { db } from '$lib/server/db';
 import {
 	citizenReport,
@@ -62,14 +68,191 @@ function calculateElapsedMinutes(run: typeof routeRun.$inferSelect) {
 	return Number(((endTime - run.startedAt) / 60000).toFixed(2));
 }
 
+async function listLiveRoadIssues(routeRunId: number, zoneIds: number[]) {
+	const rows = await db
+		.select()
+		.from(roadConditionReport)
+		.where(gte(roadConditionReport.createdAt, Date.now() - 14 * 24 * 60 * 60 * 1000))
+		.orderBy(desc(roadConditionReport.createdAt));
+
+	return rows.filter((issue) => {
+		if (issue.routeRunId && issue.routeRunId !== routeRunId) return false;
+		if (issue.zoneId === null) return true;
+		return zoneIds.includes(issue.zoneId);
+	});
+}
+
+function getRunAnchor(
+	run: typeof routeRun.$inferSelect,
+	stops: Array<typeof routeStop.$inferSelect>
+): RoutePoint | null {
+	const completedStops = stops.filter((stop) => stop.status !== 'pending');
+	const lastCompletedStop = completedStops[completedStops.length - 1];
+
+	if (lastCompletedStop) {
+		return {
+			id: -lastCompletedStop.id,
+			lat: lastCompletedStop.latitude,
+			lng: lastCompletedStop.longitude,
+			zoneId: lastCompletedStop.zoneId,
+			label: `Stop ${lastCompletedStop.sequence}`
+		};
+	}
+
+	if (run.originLatitude !== null && run.originLongitude !== null) {
+		return {
+			id: 0,
+			lat: run.originLatitude,
+			lng: run.originLongitude,
+			zoneId: null,
+			label: 'Route start'
+		};
+	}
+
+	const firstPendingStop = stops.find((stop) => stop.status === 'pending');
+	if (!firstPendingStop) return null;
+
+	return {
+		id: 0,
+		lat: firstPendingStop.latitude,
+		lng: firstPendingStop.longitude,
+		zoneId: firstPendingStop.zoneId,
+		label: `Stop ${firstPendingStop.sequence}`
+	};
+}
+
+function buildBaselineLegs(
+	anchor: RoutePoint,
+	pendingStops: Array<typeof routeStop.$inferSelect>,
+	issues: RouteIssue[],
+	departureHour: number
+) {
+	const baselineLegs: number[] = [];
+	let current = anchor;
+
+	for (const stop of pendingStops) {
+		const point: RoutePoint = {
+			id: stop.id,
+			lat: stop.latitude,
+			lng: stop.longitude,
+			zoneId: stop.zoneId,
+			label: `Stop ${stop.sequence}`
+		};
+		const leg = estimateLegTravel(current, point, issues, departureHour);
+		baselineLegs.push(leg.travelMinutes);
+		current = point;
+	}
+
+	return baselineLegs;
+}
+
+async function buildLiveRouteSnapshot(
+	run: typeof routeRun.$inferSelect,
+	stops: Array<typeof routeStop.$inferSelect>
+) {
+	const pendingStops = stops.filter((stop) => stop.status === 'pending');
+	if (pendingStops.length === 0) {
+		return {
+			liveRoute: null,
+			liveStopIds: [] as number[]
+		};
+	}
+
+	const anchor = getRunAnchor(run, stops);
+	if (!anchor) {
+		return {
+			liveRoute: null,
+			liveStopIds: pendingStops.map((stop) => stop.id)
+		};
+	}
+
+	const zoneIds = [
+		...new Set(
+			pendingStops
+				.map((stop) => stop.zoneId)
+				.filter((zoneId): zoneId is number => zoneId !== null)
+		)
+	];
+	const rawIssues = await listLiveRoadIssues(run.id, zoneIds);
+	const issues: RouteIssue[] = rawIssues.map((issue) => ({
+		id: issue.id,
+		issueType: issue.issueType,
+		severity: issue.severity,
+		trafficLevel: issue.trafficLevel,
+		latitude: issue.latitude,
+		longitude: issue.longitude,
+		startLatitude: issue.startLatitude,
+		startLongitude: issue.startLongitude,
+		endLatitude: issue.endLatitude,
+		endLongitude: issue.endLongitude,
+		estimatedDelayMinutes: issue.estimatedDelayMinutes
+	}));
+	const departureHour = new Date().getHours();
+	const routePlan = optimizeRoute(
+		[
+			anchor,
+			...pendingStops.map((stop) => ({
+				id: stop.id,
+				lat: stop.latitude,
+				lng: stop.longitude,
+				zoneId: stop.zoneId,
+				label: `Stop ${stop.sequence}`
+			}))
+		],
+		issues,
+		departureHour
+	);
+	const liveStopIds = routePlan.orderedPoints.slice(1).map((point) => Number(point.id));
+	const baselineStopIds = pendingStops.map((stop) => stop.id);
+	const baselineLegDurationsMinutes = buildBaselineLegs(anchor, pendingStops, issues, departureHour);
+	const baselineRemainingMinutes = baselineLegDurationsMinutes.reduce((sum, leg) => sum + leg, 0);
+	const remainingDurationMinutes = routePlan.legDurationsMinutes.reduce((sum, leg) => sum + leg, 0);
+	const nextStopEtaMinutes = routePlan.legDurationsMinutes[0] ?? 0;
+	const expectedCompletionAt =
+		remainingDurationMinutes > 0
+			? new Date(Date.now() + remainingDurationMinutes * 60_000).toISOString()
+			: null;
+
+	return {
+		liveRoute: {
+			model: 'condition-aware-live-v1',
+			generatedAt: Date.now(),
+			routeGeometry: {
+				type: 'LineString' as const,
+				coordinates: routePlan.geometry.map(([lat, lng]) => [lng, lat] as [number, number])
+			},
+			legDurationsMinutes: routePlan.legDurationsMinutes,
+			remainingDistanceKm: routePlan.plannedDistanceKm,
+			remainingDurationMinutes: Number(remainingDurationMinutes.toFixed(2)),
+			baselineRemainingMinutes: Number(baselineRemainingMinutes.toFixed(2)),
+			etaDeltaMinutes: Number((remainingDurationMinutes - baselineRemainingMinutes).toFixed(2)),
+			nextStopEtaMinutes: Number(nextStopEtaMinutes.toFixed(2)),
+			expectedCompletionAt,
+			rerouted: liveStopIds.join(',') !== baselineStopIds.join(','),
+			liveStopIds,
+			riskScore: routePlan.metadata.riskScore,
+			congestionScore: routePlan.metadata.congestionScore,
+			blockedLegs: routePlan.metadata.blockedLegs,
+			issueIds: routePlan.metadata.issueIds,
+			activeIssueCount: rawIssues.length
+		},
+		liveStopIds
+	};
+}
+
 export async function getAssignedRun(driverUserId: string, runDate = toYmdDate()) {
 	const runs = await db
 		.select()
 		.from(routeRun)
-		.where(and(eq(routeRun.driverUserId, driverUserId), eq(routeRun.runDate, runDate)))
-		.orderBy(desc(routeRun.createdAt));
+		.where(eq(routeRun.driverUserId, driverUserId))
+		.orderBy(desc(routeRun.runDate), desc(routeRun.createdAt));
 
-	const run = runs.find((candidate) => candidate.status !== 'completed') ?? runs[0];
+	const runsForDate = runs.filter((candidate) => candidate.runDate === runDate);
+	const run =
+		runsForDate.find((candidate) => candidate.status !== 'completed') ??
+		runsForDate[0] ??
+		runs.find((candidate) => candidate.status !== 'completed') ??
+		runs[0];
 
 	if (!run) return null;
 
@@ -100,6 +283,8 @@ export async function getAssignedRun(driverUserId: string, runDate = toYmdDate()
 		)
 		.orderBy(desc(roadConditionReport.createdAt));
 
+	const { liveRoute, liveStopIds } = await buildLiveRouteSnapshot(run, stops);
+
 	return {
 		run,
 		stops,
@@ -117,6 +302,8 @@ export async function getAssignedRun(driverUserId: string, runDate = toYmdDate()
 			blockedLegs?: number;
 			issueIds?: Array<number | string>;
 		}>(run.optimizerMetadataJson) ?? null,
+		liveRoute,
+		liveStopIds,
 		elapsedMinutes: calculateElapsedMinutes(run),
 		summary: summaryRow
 			? {
@@ -212,23 +399,6 @@ export async function submitStopUpdate(input: {
 			.where(eq(routeRun.id, input.runId));
 	}
 
-	const pendingStops = await db
-		.select({ id: routeStop.id })
-		.from(routeStop)
-		.where(and(eq(routeStop.routeRunId, input.runId), eq(routeStop.status, 'pending')))
-		.limit(1);
-
-	if (pendingStops.length === 0) {
-		await db
-			.update(routeRun)
-			.set({
-				status: 'completed',
-				completedAt: timestamp,
-				updatedAt: timestamp
-			})
-			.where(eq(routeRun.id, input.runId));
-	}
-
 	await db.insert(driverEventLog).values({
 		routeRunId: input.runId,
 		driverUserId: input.driverUserId,
@@ -241,6 +411,47 @@ export async function submitStopUpdate(input: {
 	});
 
 	return updatedStop;
+}
+
+export async function finishAssignedRun(driverUserId: string, runId: number) {
+	const [run] = await db.select().from(routeRun).where(eq(routeRun.id, runId)).limit(1);
+	if (!run) throw error(404, 'Route run not found');
+	if (run.driverUserId && run.driverUserId !== driverUserId) {
+		throw error(403, 'You are not assigned to this run.');
+	}
+	if (run.status === 'completed') return run;
+
+	const pendingStops = await db
+		.select({ id: routeStop.id })
+		.from(routeStop)
+		.where(and(eq(routeStop.routeRunId, runId), eq(routeStop.status, 'pending')))
+		.limit(1);
+
+	if (pendingStops.length > 0) {
+		throw error(400, 'Complete or skip every stop before finishing the run.');
+	}
+
+	const timestamp = Date.now();
+	const [updated] = await db
+		.update(routeRun)
+		.set({
+			status: 'completed',
+			completedAt: run.completedAt ?? timestamp,
+			updatedAt: timestamp
+		})
+		.where(eq(routeRun.id, runId))
+		.returning();
+
+	await db.insert(driverEventLog).values({
+		routeRunId: runId,
+		driverUserId,
+		eventType: 'run_completed',
+		payloadJson: JSON.stringify({
+			completedAt: updated.completedAt
+		})
+	});
+
+	return updated;
 }
 
 export async function submitRoadConditionIssue(input: {

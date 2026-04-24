@@ -1,6 +1,7 @@
 <script lang="ts">
 	import InsightMap from '$lib/components/InsightMap.svelte';
 	import {
+		finishRun,
 		getCurrentRun,
 		startRun,
 		submitRunSummaryEntry,
@@ -14,10 +15,21 @@
 	let roadConditionNotes = $state('');
 	let missedPickups = $state('0');
 	let submittingSummary = $state(false);
+	let finishingRun = $state(false);
 
 	async function startCurrentRun(runId: number) {
 		await startRun({ runId });
 		await currentRun.refresh();
+	}
+
+	async function finishCurrentRun(runId: number) {
+		finishingRun = true;
+		try {
+			await finishRun({ runId });
+			await currentRun.refresh();
+		} finally {
+			finishingRun = false;
+		}
 	}
 
 	async function markStop(runId: number, stopId: number, status: 'done' | 'skipped') {
@@ -54,16 +66,79 @@
 		}
 	}
 
+	function routeStatusHeading(status: string) {
+		if (status === 'planned') return 'Ready to start';
+		if (status === 'completed') return 'Run completed';
+		return 'Route in progress';
+	}
+
+	function etaLabel(iso: string | null | undefined) {
+		if (!iso) return 'Awaiting live ETA';
+		return new Date(iso).toLocaleTimeString([], {
+			hour: 'numeric',
+			minute: '2-digit'
+		});
+	}
+
+	function formatSignedMinutes(value: number | null | undefined) {
+		if (value === null || value === undefined) return '0 min';
+		const rounded = Math.round(value);
+		if (rounded === 0) return '0 min';
+		return `${rounded > 0 ? '+' : ''}${rounded} min`;
+	}
+
+	function trafficWeight(issue: {
+		severity: 'low' | 'medium' | 'high';
+		trafficLevel: 'light' | 'moderate' | 'heavy' | 'standstill';
+	}) {
+		const base = issue.trafficLevel === 'standstill' ? 8 : issue.trafficLevel === 'heavy' ? 7 : issue.trafficLevel === 'moderate' ? 5 : 4;
+		return issue.severity === 'high' ? base + 1 : issue.severity === 'low' ? Math.max(3, base - 1) : base;
+	}
+
+	function sortStopsByDynamicOrder(
+		stops: Array<{
+			id: number;
+			sequence: number;
+			latitude: number;
+			longitude: number;
+			zoneId: number | null;
+			status: 'pending' | 'done' | 'skipped';
+		}>,
+		liveStopIds: number[]
+	) {
+		const liveOrder = new Map(liveStopIds.map((stopId, index) => [stopId, index]));
+
+		return [...stops].sort((a, b) => {
+			if (a.status !== 'pending' && b.status === 'pending') return -1;
+			if (a.status === 'pending' && b.status !== 'pending') return 1;
+			if (a.status !== 'pending' && b.status !== 'pending') return a.sequence - b.sequence;
+			return (liveOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (liveOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER);
+		});
+	}
+
+	$effect(() => {
+		if (!currentRun.current || currentRun.current.run.status === 'completed') return;
+		const handle = window.setInterval(() => {
+			void currentRun.refresh();
+		}, 30000);
+
+		return () => window.clearInterval(handle);
+	});
+
 	function routeLines() {
-		if (!currentRun.current?.routeGeometry) return [];
+		const run = currentRun.current;
+		if (!run) return [];
+		const geometry = run.liveRoute?.routeGeometry ?? run.routeGeometry;
+		if (!geometry) return [];
+
 		return [
 			{
-				points: currentRun.current.routeGeometry.coordinates.map(([lng, lat]) => [lat, lng] as [number, number]),
-				label: `Run #${currentRun.current.run.id}`,
+				points: geometry.coordinates.map(([lng, lat]) => [lat, lng] as [number, number]),
+				label: run.liveRoute?.rerouted ? `Run #${run.run.id} live reroute` : `Run #${run.run.id}`,
 				color: '#0ea5e9',
-				weight: 5
+				weight: run.liveRoute?.rerouted ? 6 : 5
 			},
-			...currentRun.current.roadIssues
+			...run.roadIssues
 				.filter((issue) => issue.startLatitude !== null && issue.startLongitude !== null && issue.endLatitude !== null && issue.endLongitude !== null)
 				.map((issue) => ({
 					points: [
@@ -77,7 +152,7 @@
 							: issue.severity === 'medium'
 								? '#f59e0b'
 								: '#22c55e',
-					weight: 4,
+					weight: trafficWeight(issue),
 					dashArray: '10 8'
 				}))
 		];
@@ -85,14 +160,19 @@
 
 	function routeMarkers() {
 		if (!currentRun.current) return [];
+		const nextDynamicStopId = currentRun.current.liveStopIds?.[0] ?? null;
+
 		return [
 			...currentRun.current.stops.map((stop) => ({
 				lat: stop.latitude,
 				lng: stop.longitude,
-				label: `Stop ${stop.sequence} • ${stop.status}`,
+				label:
+					stop.id === nextDynamicStopId
+						? `Next stop ${stop.sequence} • ${stop.status}`
+						: `Stop ${stop.sequence} • ${stop.status}`,
 				color: '#0f172a',
 				fillColor: stop.status === 'done' ? '#22c55e' : stop.status === 'skipped' ? '#f59e0b' : '#38bdf8',
-				radius: 7
+				radius: stop.id === nextDynamicStopId ? 9 : 7
 			})),
 			...currentRun.current.roadIssues
 				.filter((issue) => issue.latitude !== null && issue.longitude !== null)
@@ -107,15 +187,31 @@
 		];
 	}
 
+	let liveRoute = $derived(currentRun.current?.liveRoute ?? null);
+	let displayedStops = $derived(
+		currentRun.current
+			? sortStopsByDynamicOrder(currentRun.current.stops, currentRun.current.liveStopIds ?? [])
+			: []
+	);
 	let optimizerLegs = $derived(
-		currentRun.current?.optimizerMetadata?.legDurationsMinutes ?? []
+		liveRoute?.legDurationsMinutes ?? currentRun.current?.optimizerMetadata?.legDurationsMinutes ?? []
 	);
 	let nextPendingStop = $derived(
-		currentRun.current?.stops.find((stop) => stop.status === 'pending') ?? null
+		currentRun.current?.stops.find((stop) => stop.id === (currentRun.current?.liveStopIds?.[0] ?? -1)) ??
+			currentRun.current?.stops.find((stop) => stop.status === 'pending') ??
+			null
+	);
+	let pendingStops = $derived(currentRun.current?.stops.filter((stop) => stop.status === 'pending') ?? []);
+	let canFinishRun = $derived(
+		!!currentRun.current &&
+			pendingStops.length === 0 &&
+			currentRun.current.run.status !== 'completed'
 	);
 	let optimizerPlan = $derived(
 		currentRun.current
-			? currentRun.current.stops.map((stop, index) => ({
+			? displayedStops
+					.filter((stop) => stop.status === 'pending')
+					.map((stop, index) => ({
 					stop,
 					legMinutes: optimizerLegs[index] ?? 0,
 					cumulativeMinutes: optimizerLegs
@@ -131,7 +227,7 @@
 		<p class="text-xs font-semibold uppercase tracking-[0.28em] text-white/70">Driver dashboard</p>
 		<h1 class="mt-2 font-[Georgia] text-4xl font-semibold tracking-tight">Follow the route. Watch the time.</h1>
 		<p class="mt-3 max-w-2xl text-sm leading-6 text-white/82">
-			View the optimized route, compare estimated and actual time, and keep stop progress updated while road-condition reports stay on their own tab.
+			View the live optimized route, follow traffic-weighted reroutes, track ETA to the next stop, and close the run when collection is complete.
 		</p>
 	</section>
 
@@ -153,7 +249,7 @@
 							Run #{currentRun.current.run.id}
 						</p>
 						<h2 class="mt-2 font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
-							{currentRun.current.run.status === 'planned' ? 'Ready to start' : 'Route in progress'}
+							{routeStatusHeading(currentRun.current.run.status)}
 						</h2>
 						<p class="mt-2 text-sm text-slate-600">
 							{currentRun.current.run.runDate} • {currentRun.current.run.plannedDistanceKm.toFixed(1)} km planned
@@ -175,22 +271,43 @@
 							>
 								Start run
 							</button>
+						{:else if canFinishRun}
+							<button
+								type="button"
+								onclick={() => finishCurrentRun(currentRun.current!.run.id)}
+								disabled={finishingRun}
+								class="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+							>
+								{finishingRun ? 'Finishing…' : 'Finish run'}
+							</button>
 						{/if}
 					</div>
 				</div>
 
-				<div class="mt-5 grid gap-3 md:grid-cols-4">
+				<div class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
 					<div class="rounded-[1.3rem] bg-gradient-to-br from-cyan-500 to-sky-600 p-4 text-white">
 						<p class="text-xs uppercase tracking-[0.18em] text-white/70">Stops</p>
 						<p class="mt-2 text-3xl font-semibold">{currentRun.current.stops.length}</p>
 					</div>
 					<div class="rounded-[1.3rem] bg-gradient-to-br from-emerald-400 to-teal-600 p-4 text-white">
-						<p class="text-xs uppercase tracking-[0.18em] text-white/70">Estimated time</p>
-						<p class="mt-2 text-3xl font-semibold">{currentRun.current.run.estimatedDurationMinutes.toFixed(0)}m</p>
+						<p class="text-xs uppercase tracking-[0.18em] text-white/70">Next stop ETA</p>
+						<p class="mt-2 text-3xl font-semibold">
+							{liveRoute?.nextStopEtaMinutes?.toFixed(0) ?? '0'}m
+						</p>
+					</div>
+					<div class="rounded-[1.3rem] bg-gradient-to-br from-violet-500 to-indigo-600 p-4 text-white">
+						<p class="text-xs uppercase tracking-[0.18em] text-white/70">Expected arrival</p>
+						<p class="mt-2 text-2xl font-semibold">{etaLabel(liveRoute?.expectedCompletionAt)}</p>
 					</div>
 					<div class="rounded-[1.3rem] bg-gradient-to-br from-amber-300 to-orange-500 p-4 text-slate-950">
 						<p class="text-xs uppercase tracking-[0.18em] text-slate-900/60">Time taken</p>
 						<p class="mt-2 text-3xl font-semibold">{currentRun.current.elapsedMinutes.toFixed(0)}m</p>
+					</div>
+					<div class="rounded-[1.3rem] bg-gradient-to-br from-emerald-300 to-lime-500 p-4 text-slate-950">
+						<p class="text-xs uppercase tracking-[0.18em] text-slate-900/60">Remaining ETA</p>
+						<p class="mt-2 text-3xl font-semibold">
+							{liveRoute?.remainingDurationMinutes?.toFixed(0) ?? currentRun.current.run.estimatedDurationMinutes.toFixed(0)}m
+						</p>
 					</div>
 					<div class="rounded-[1.3rem] bg-gradient-to-br from-rose-300 to-pink-500 p-4 text-slate-950">
 						<p class="text-xs uppercase tracking-[0.18em] text-slate-900/60">Road issues</p>
@@ -206,15 +323,21 @@
 							Route map
 						</h2>
 						<p class="text-sm text-slate-600">
-							Optimized path plus reported route-condition segments.
+							Live optimum path plus traffic-weighted route-condition segments.
 						</p>
 					</div>
-					{#if currentRun.current.optimizerMetadata}
+					{#if liveRoute || currentRun.current.optimizerMetadata}
 						<div class="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
-							Risk {currentRun.current.optimizerMetadata.riskScore?.toFixed(0) ?? '0'} • Congestion {currentRun.current.optimizerMetadata.congestionScore?.toFixed(0) ?? '0'}
+							Risk {(liveRoute?.riskScore ?? currentRun.current.optimizerMetadata?.riskScore ?? 0).toFixed(0)} • Congestion {(liveRoute?.congestionScore ?? currentRun.current.optimizerMetadata?.congestionScore ?? 0).toFixed(0)}
 						</div>
 					{/if}
 				</div>
+
+				{#if liveRoute?.rerouted}
+					<div class="mt-4 rounded-[1.35rem] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+						Route updated from live traffic and congestion weights. Remaining ETA changed by {formatSignedMinutes(liveRoute.etaDeltaMinutes)} and {liveRoute.activeIssueCount} active road issue(s) are influencing the route.
+					</div>
+				{/if}
 
 				<div class="mt-4">
 					<InsightMap
@@ -235,12 +358,12 @@
 							Optimizer guidance
 						</h2>
 						<p class="mt-2 text-sm text-slate-600">
-							Recommended stop order, leg timing, and route risk summary for the assigned run.
+							Recommended stop order, ETA, and route changes caused by live traffic reports.
 						</p>
 					</div>
-					{#if currentRun.current.optimizerMetadata}
+					{#if liveRoute || currentRun.current.optimizerMetadata}
 						<div class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
-							{currentRun.current.optimizerMetadata.model ?? 'condition-aware'}
+							{liveRoute?.model ?? currentRun.current.optimizerMetadata?.model ?? 'condition-aware'}
 						</div>
 					{/if}
 				</div>
@@ -259,25 +382,25 @@
 							</p>
 						</div>
 						<div class="rounded-[1.35rem] bg-gradient-to-br from-emerald-400 to-teal-600 p-4 text-white">
-							<p class="text-xs uppercase tracking-[0.18em] text-white/70">Estimated full route</p>
+							<p class="text-xs uppercase tracking-[0.18em] text-white/70">Expected completion</p>
 							<p class="mt-2 text-3xl font-semibold">
-								{currentRun.current.run.estimatedDurationMinutes.toFixed(0)} min
+								{etaLabel(liveRoute?.expectedCompletionAt)}
 							</p>
 							<p class="mt-2 text-sm text-white/78">
-								Distance {currentRun.current.run.plannedDistanceKm.toFixed(1)} km
+								Remaining distance {(liveRoute?.remainingDistanceKm ?? currentRun.current.run.plannedDistanceKm).toFixed(1)} km
 							</p>
 						</div>
 						<div class="grid gap-3 sm:grid-cols-2">
 							<div class="rounded-[1.25rem] bg-amber-50 p-4">
 								<p class="text-xs uppercase tracking-[0.18em] text-amber-700">Blocked legs</p>
 								<p class="mt-2 text-3xl font-semibold text-slate-900">
-									{currentRun.current.optimizerMetadata?.blockedLegs ?? 0}
+									{liveRoute?.blockedLegs ?? currentRun.current.optimizerMetadata?.blockedLegs ?? 0}
 								</p>
 							</div>
 							<div class="rounded-[1.25rem] bg-rose-50 p-4">
-								<p class="text-xs uppercase tracking-[0.18em] text-rose-700">Risk score</p>
+								<p class="text-xs uppercase tracking-[0.18em] text-rose-700">ETA change</p>
 								<p class="mt-2 text-3xl font-semibold text-slate-900">
-									{currentRun.current.optimizerMetadata?.riskScore?.toFixed(0) ?? '0'}
+									{formatSignedMinutes(liveRoute?.etaDeltaMinutes)}
 								</p>
 							</div>
 						</div>
@@ -292,24 +415,32 @@
 						</div>
 
 						<div class="mt-4 space-y-3">
-							{#each optimizerPlan as item}
-								<div class="flex flex-wrap items-center justify-between gap-3 rounded-[1.15rem] bg-white px-4 py-3">
-									<div>
-										<p class="font-semibold text-slate-900">Stop {item.stop.sequence}</p>
-										<p class="mt-1 text-xs text-slate-500">
-											{item.stop.latitude.toFixed(5)}, {item.stop.longitude.toFixed(5)}
-										</p>
+							{#if optimizerPlan.length === 0}
+								<p class="rounded-[1.15rem] bg-white px-4 py-6 text-sm text-slate-500">
+									All assigned stops have been handled.
+								</p>
+							{:else}
+								{#each optimizerPlan as item, index}
+									<div class="flex flex-wrap items-center justify-between gap-3 rounded-[1.15rem] bg-white px-4 py-3">
+										<div>
+											<p class="font-semibold text-slate-900">
+												{index === 0 ? 'Next stop' : 'Then'} • Stop {item.stop.sequence}
+											</p>
+											<p class="mt-1 text-xs text-slate-500">
+												{item.stop.latitude.toFixed(5)}, {item.stop.longitude.toFixed(5)}
+											</p>
+										</div>
+										<div class="text-right">
+											<p class="text-sm font-semibold text-slate-900">
+												{item.legMinutes.toFixed(0)} min leg
+											</p>
+											<p class="mt-1 text-xs text-slate-500">
+												ETA +{item.cumulativeMinutes.toFixed(0)} min
+											</p>
+										</div>
 									</div>
-									<div class="text-right">
-										<p class="text-sm font-semibold text-slate-900">
-											{item.legMinutes.toFixed(0)} min leg
-										</p>
-										<p class="mt-1 text-xs text-slate-500">
-											ETA +{item.cumulativeMinutes.toFixed(0)} min
-										</p>
-									</div>
-								</div>
-							{/each}
+								{/each}
+							{/if}
 						</div>
 					</div>
 				</div>
@@ -321,23 +452,48 @@
 						<h2 class="font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
 							Stop checklist
 						</h2>
-						<p class="text-sm text-slate-600">Mark each stop as done or skipped as you work through the route.</p>
+						<p class="text-sm text-slate-600">Mark each stop as done or skipped as you work through the live route.</p>
 					</div>
-					<button
-						type="button"
-						onclick={() => currentRun.refresh()}
-						class="rounded-full border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-sky-900 hover:bg-sky-50"
-					>
-						Refresh
-					</button>
+					<div class="flex flex-wrap gap-2">
+						<button
+							type="button"
+							onclick={() => currentRun.refresh()}
+							class="rounded-full border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-sky-900 hover:bg-sky-50"
+						>
+							Refresh
+						</button>
+						{#if canFinishRun}
+							<button
+								type="button"
+								onclick={() => finishCurrentRun(currentRun.current!.run.id)}
+								disabled={finishingRun}
+								class="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+							>
+								{finishingRun ? 'Finishing…' : 'Finish run'}
+							</button>
+						{/if}
+					</div>
 				</div>
 
+				{#if canFinishRun}
+					<div class="rounded-[1.25rem] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+						All stops have been handled. Finish the run to mark the collection route as complete.
+					</div>
+				{/if}
+
 				<div class="grid gap-4">
-					{#each currentRun.current.stops as stop}
+					{#each displayedStops as stop}
 						<article class="rounded-[1.5rem] border border-sky-100 bg-gradient-to-br from-white to-sky-50 p-4">
 							<div class="flex flex-wrap items-center justify-between gap-3">
 								<div>
-									<p class="font-semibold text-slate-900">Stop {stop.sequence}</p>
+									<p class="font-semibold text-slate-900">
+										Stop {stop.sequence}
+										{#if stop.id === (currentRun.current.liveStopIds?.[0] ?? -1)}
+											<span class="ml-2 rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-cyan-700">
+												Next
+											</span>
+										{/if}
+									</p>
 									<p class="mt-1 text-xs text-slate-500">
 										{stop.latitude.toFixed(5)}, {stop.longitude.toFixed(5)}
 										{#if stop.zoneId}

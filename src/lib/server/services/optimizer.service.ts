@@ -8,7 +8,6 @@ import {
 	roadConditionReport,
 	routeRun,
 	routeStop,
-	userRole,
 	zone,
 	user
 } from '$lib/server/db/schema';
@@ -22,6 +21,20 @@ import { ensureReferenceData } from '$lib/server/services/reference-data.service
 type RunGenerationInput = {
 	runDate?: string;
 	wardId?: number;
+};
+
+type RouteGeometry = {
+	type: 'LineString';
+	coordinates: Array<[number, number]>;
+};
+
+type RouteMetadata = {
+	model?: string;
+	legDurationsMinutes?: number[];
+	riskScore?: number;
+	congestionScore?: number;
+	blockedLegs?: number;
+	issueIds?: Array<number | string>;
 };
 
 export type DispatchDriver = {
@@ -50,6 +63,17 @@ export type DispatchRun = {
 	completedStopCount: number;
 	skippedStopCount: number;
 	createdAt: number;
+	routeGeometry: RouteGeometry | null;
+	optimizerMetadata: RouteMetadata | null;
+	stops: Array<{
+		id: number;
+		sequence: number;
+		zoneId: number | null;
+		sourceReportId: number | null;
+		latitude: number;
+		longitude: number;
+		status: 'pending' | 'done' | 'skipped';
+	}>;
 };
 
 function estimateDistance(points: Array<{ lat: number; lng: number }>): number {
@@ -65,6 +89,16 @@ function estimateDistance(points: Array<{ lat: number; lng: number }>): number {
 			}, 0)
 			.toFixed(2)
 	);
+}
+
+function parseJson<T>(value: string | null): T | null {
+	if (!value) return null;
+
+	try {
+		return JSON.parse(value) as T;
+	} catch {
+		return null;
+	}
 }
 
 async function listRecentRouteIssues() {
@@ -89,6 +123,19 @@ async function listRecentRouteIssues() {
 		.where(gte(roadConditionReport.createdAt, Date.now() - 14 * 24 * 60 * 60 * 1000));
 }
 
+async function listActiveDispatchDrivers() {
+	return db
+		.select({
+			userId: driverProfile.userId,
+			name: user.name,
+			email: user.email,
+			vehicleId: driverProfile.vehicleId
+		})
+		.from(driverProfile)
+		.innerJoin(user, eq(driverProfile.userId, user.id))
+		.where(eq(driverProfile.active, true));
+}
+
 async function getAvailableDriverOrThrow(driverUserId: string) {
 	const [driver] = await db
 		.select({
@@ -98,19 +145,58 @@ async function getAvailableDriverOrThrow(driverUserId: string) {
 			vehicleId: driverProfile.vehicleId
 		})
 		.from(driverProfile)
-		.innerJoin(userRole, eq(driverProfile.userId, userRole.userId))
 		.innerJoin(user, eq(driverProfile.userId, user.id))
-		.where(
-			and(
-				eq(driverProfile.userId, driverUserId),
-				eq(driverProfile.active, true),
-				eq(userRole.role, 'driver')
-			)
-		)
+		.where(and(eq(driverProfile.userId, driverUserId), eq(driverProfile.active, true)))
 		.limit(1);
 
 	if (!driver) throw error(400, 'Selected driver is not available.');
 	return driver;
+}
+
+async function syncPlannedRunAfterRemovingReport(runId: number, reportId: number) {
+	const [run] = await db.select().from(routeRun).where(eq(routeRun.id, runId)).limit(1);
+	if (!run || run.status !== 'planned') return;
+
+	const remainingStops = await db
+		.select()
+		.from(routeStop)
+		.where(eq(routeStop.routeRunId, runId))
+		.orderBy(routeStop.sequence);
+	const filteredStops = remainingStops.filter((stop) => stop.sourceReportId !== reportId);
+
+	if (filteredStops.length === remainingStops.length) return;
+
+	if (filteredStops.length === 0) {
+		await db.delete(routeStop).where(eq(routeStop.routeRunId, runId));
+		await db
+			.update(routeRun)
+			.set({
+				plannedDistanceKm: 0,
+				estimatedDurationMinutes: 0,
+				originLatitude: null,
+				originLongitude: null,
+				destinationLatitude: null,
+				destinationLongitude: null,
+				routeGeometryJson: null,
+				optimizerMetadataJson: null,
+				updatedAt: Date.now()
+			})
+			.where(eq(routeRun.id, runId));
+		return;
+	}
+
+	await rebuildPlannedRunRoute({
+		runId,
+		wardId: run.wardId,
+		driverUserId: run.driverUserId,
+		stops: filteredStops.map((stop) => ({
+			zoneId: stop.zoneId,
+			sourceReportId: stop.sourceReportId as number,
+			latitude: stop.latitude,
+			longitude: stop.longitude,
+			label: `Report ${stop.sourceReportId ?? stop.id}`
+		}))
+	});
 }
 
 async function rebuildPlannedRunRoute(input: {
@@ -284,13 +370,7 @@ export async function generateDailyRuns(input: RunGenerationInput = {}) {
 		};
 	}
 
-	const drivers = await db
-		.select({
-			userId: driverProfile.userId
-		})
-		.from(driverProfile)
-		.innerJoin(userRole, eq(driverProfile.userId, userRole.userId))
-		.where(and(eq(driverProfile.active, true), eq(userRole.role, 'driver')));
+	const drivers = await listActiveDispatchDrivers();
 
 	const assignees: Array<string | null> = drivers.length > 0 ? drivers.map((d) => d.userId) : [null];
 	const assignments: typeof filteredRows[] = assignees.map(() => []);
@@ -445,17 +525,7 @@ export async function generateDailyRuns(input: RunGenerationInput = {}) {
 }
 
 export async function listDispatchDrivers(): Promise<DispatchDriver[]> {
-	const rows = await db
-		.select({
-			userId: driverProfile.userId,
-			name: user.name,
-			email: user.email,
-			vehicleId: driverProfile.vehicleId
-		})
-		.from(driverProfile)
-		.innerJoin(userRole, eq(driverProfile.userId, userRole.userId))
-		.innerJoin(user, eq(driverProfile.userId, user.id))
-		.where(and(eq(driverProfile.active, true), eq(userRole.role, 'driver')));
+	const rows = await listActiveDispatchDrivers();
 
 	return rows.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -484,7 +554,9 @@ export async function listDispatchRuns(runDate = toYmdDate()): Promise<DispatchR
 			driverName: user.name,
 			plannedDistanceKm: routeRun.plannedDistanceKm,
 			estimatedDurationMinutes: routeRun.estimatedDurationMinutes,
-			createdAt: routeRun.createdAt
+			createdAt: routeRun.createdAt,
+			routeGeometryJson: routeRun.routeGeometryJson,
+			optimizerMetadataJson: routeRun.optimizerMetadataJson
 		})
 		.from(routeRun)
 		.leftJoin(user, eq(routeRun.driverUserId, user.id))
@@ -495,13 +567,21 @@ export async function listDispatchRuns(runDate = toYmdDate()): Promise<DispatchR
 	const runIds = runRows.map((run) => run.id);
 	const stopRows = await db
 		.select({
+			id: routeStop.id,
 			routeRunId: routeStop.routeRunId,
+			sequence: routeStop.sequence,
+			zoneId: routeStop.zoneId,
+			sourceReportId: routeStop.sourceReportId,
+			latitude: routeStop.latitude,
+			longitude: routeStop.longitude,
 			status: routeStop.status
 		})
 		.from(routeStop)
-		.where(inArray(routeStop.routeRunId, runIds));
+		.where(inArray(routeStop.routeRunId, runIds))
+		.orderBy(routeStop.sequence);
 
 	const stopStatsByRun = new Map<number, { total: number; completed: number; skipped: number }>();
+	const stopsByRun = new Map<DispatchRun['id'], DispatchRun['stops']>();
 
 	for (const stop of stopRows) {
 		const current = stopStatsByRun.get(stop.routeRunId) ?? {
@@ -513,6 +593,18 @@ export async function listDispatchRuns(runDate = toYmdDate()): Promise<DispatchR
 		if (stop.status === 'done') current.completed += 1;
 		if (stop.status === 'skipped') current.skipped += 1;
 		stopStatsByRun.set(stop.routeRunId, current);
+
+		const runStops = stopsByRun.get(stop.routeRunId) ?? [];
+		runStops.push({
+			id: stop.id,
+			sequence: stop.sequence,
+			zoneId: stop.zoneId,
+			sourceReportId: stop.sourceReportId,
+			latitude: stop.latitude,
+			longitude: stop.longitude,
+			status: stop.status
+		});
+		stopsByRun.set(stop.routeRunId, runStops);
 	}
 
 	return runRows
@@ -534,7 +626,10 @@ export async function listDispatchRuns(runDate = toYmdDate()): Promise<DispatchR
 				stopCount: stopStats.total,
 				completedStopCount: stopStats.completed,
 				skippedStopCount: stopStats.skipped,
-				createdAt: run.createdAt
+				createdAt: run.createdAt,
+				routeGeometry: parseJson<RouteGeometry>(run.routeGeometryJson),
+				optimizerMetadata: parseJson<RouteMetadata>(run.optimizerMetadataJson),
+				stops: stopsByRun.get(run.id) ?? []
 			} as DispatchRun;
 		})
 		.sort((a, b) => b.createdAt - a.createdAt);
@@ -577,6 +672,7 @@ export async function dispatchCitizenReport(input: {
 	if (!report) throw error(404, 'Citizen report not found.');
 	if (report.status === 'resolved') throw error(400, 'This report is already resolved.');
 	if (report.status === 'rejected') throw error(400, 'Rejected reports cannot be dispatched.');
+	if (report.status === 'deleted') throw error(400, 'Deleted reports cannot be dispatched.');
 
 	const driver = await getAvailableDriverOrThrow(input.driverUserId);
 	const resolvedZoneId =
@@ -596,7 +692,8 @@ export async function dispatchCitizenReport(input: {
 		.select({
 			runId: routeRun.id,
 			status: routeRun.status,
-			driverUserId: routeRun.driverUserId
+			driverUserId: routeRun.driverUserId,
+			runDate: routeRun.runDate
 		})
 		.from(routeStop)
 		.innerJoin(routeRun, eq(routeStop.routeRunId, routeRun.id))
@@ -617,7 +714,7 @@ export async function dispatchCitizenReport(input: {
 		baseConditions.push(eq(routeRun.wardId, zoneRow.wardId));
 	}
 
-	const plannedRun =
+	let plannedRun =
 		(
 			await db
 				.select()
@@ -626,11 +723,19 @@ export async function dispatchCitizenReport(input: {
 				.orderBy(desc(routeRun.createdAt))
 				.limit(1)
 		)[0] ??
-		(existingAssignedStop?.status === 'planned'
-			? (
-					await db.select().from(routeRun).where(eq(routeRun.id, existingAssignedStop.runId)).limit(1)
-				)[0] ?? null
-			: null);
+		null;
+
+	if (
+		!plannedRun &&
+		existingAssignedStop?.status === 'planned' &&
+		existingAssignedStop.runDate === runDate &&
+		existingAssignedStop.driverUserId === driver.userId
+	) {
+		plannedRun =
+			(
+				await db.select().from(routeRun).where(eq(routeRun.id, existingAssignedStop.runId)).limit(1)
+			)[0] ?? null;
+	}
 
 	let runId = plannedRun?.id ?? null;
 
@@ -648,6 +753,10 @@ export async function dispatchCitizenReport(input: {
 			})
 			.returning();
 		runId = createdRun.id;
+	}
+
+	if (existingAssignedStop && existingAssignedStop.runId !== runId) {
+		await syncPlannedRunAfterRemovingReport(existingAssignedStop.runId, report.id);
 	}
 
 	const existingStops = await db

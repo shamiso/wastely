@@ -1,6 +1,7 @@
 import { command, getRequestEvent, query } from '$app/server';
 import { requireExactRole } from '$lib/server/services/authz.service';
 import {
+	finishAssignedRun,
 	getAssignedRun,
 	listDriverRouteHistory,
 	startAssignedRun,
@@ -33,6 +34,12 @@ export const startRun = command('unchecked', async (input: { runId: number | str
 	const event = getRequestEvent();
 	const user = requireExactRole(event, 'driver');
 	return startAssignedRun(user.id, Number(input.runId));
+});
+
+export const finishRun = command('unchecked', async (input: { runId: number | string }) => {
+	const event = getRequestEvent();
+	const user = requireExactRole(event, 'driver');
+	return finishAssignedRun(user.id, Number(input.runId));
 });
 
 export const submitStop = command(
