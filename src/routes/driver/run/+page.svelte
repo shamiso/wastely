@@ -16,6 +16,9 @@
 	let missedPickups = $state('0');
 	let submittingSummary = $state(false);
 	let finishingRun = $state(false);
+	let updatingStopId = $state<number | null>(null);
+	let checklistMessage = $state('');
+	let checklistTone = $state<'success' | 'danger'>('success');
 
 	async function startCurrentRun(runId: number) {
 		await startRun({ runId });
@@ -33,12 +36,26 @@
 	}
 
 	async function markStop(runId: number, stopId: number, status: 'done' | 'skipped') {
-		await submitStop({
-			runId,
-			stopId,
-			status
-		});
-		await currentRun.refresh();
+		updatingStopId = stopId;
+		checklistMessage = '';
+		try {
+			await submitStop({
+				runId,
+				stopId,
+				status
+			});
+			checklistTone = 'success';
+			checklistMessage = `Stop ${stopId} marked ${status === 'done' ? 'done' : 'skipped'}.`;
+			await currentRun.refresh();
+		} catch (error) {
+			checklistTone = 'danger';
+			checklistMessage =
+				error instanceof Error && error.message
+					? error.message
+					: `Could not mark stop ${stopId} as ${status}.`;
+		} finally {
+			updatingStopId = null;
+		}
 	}
 
 	async function markCurrentStop(stopId: number, status: 'done' | 'skipped') {
@@ -103,17 +120,24 @@
 			longitude: number;
 			zoneId: number | null;
 			status: 'pending' | 'done' | 'skipped';
+			completedAt: number | null;
 		}>,
 		liveStopIds: number[]
 	) {
 		const liveOrder = new Map(liveStopIds.map((stopId, index) => [stopId, index]));
 
 		return [...stops].sort((a, b) => {
-			if (a.status !== 'pending' && b.status === 'pending') return -1;
-			if (a.status === 'pending' && b.status !== 'pending') return 1;
+			if (a.status === 'pending' && b.status !== 'pending') return -1;
+			if (a.status !== 'pending' && b.status === 'pending') return 1;
 			if (a.status !== 'pending' && b.status !== 'pending') return a.sequence - b.sequence;
 			return (liveOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (liveOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER);
 		});
+	}
+
+	function stopStatusTone(status: 'pending' | 'done' | 'skipped') {
+		if (status === 'done') return 'bg-emerald-100 text-emerald-700';
+		if (status === 'skipped') return 'bg-amber-100 text-amber-700';
+		return 'bg-sky-100 text-sky-700';
 	}
 
 	$effect(() => {
@@ -481,25 +505,49 @@
 					</div>
 				{/if}
 
+				{#if checklistMessage}
+					<div
+						class={`rounded-[1.25rem] px-4 py-3 text-sm ${
+							checklistTone === 'danger'
+								? 'border border-rose-200 bg-rose-50 text-rose-700'
+								: 'border border-emerald-200 bg-emerald-50 text-emerald-700'
+						}`}
+					>
+						{checklistMessage}
+					</div>
+				{/if}
+
 				<div class="grid gap-4">
 					{#each displayedStops as stop}
 						<article class="rounded-[1.5rem] border border-sky-100 bg-gradient-to-br from-white to-sky-50 p-4">
 							<div class="flex flex-wrap items-center justify-between gap-3">
 								<div>
-									<p class="font-semibold text-slate-900">
+									<div class="flex flex-wrap items-center gap-2">
+										<p class="font-semibold text-slate-900">
 										Stop {stop.sequence}
 										{#if stop.id === (currentRun.current.liveStopIds?.[0] ?? -1)}
 											<span class="ml-2 rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-cyan-700">
 												Next
 											</span>
 										{/if}
-									</p>
+										</p>
+										<span
+											class={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${stopStatusTone(stop.status)}`}
+										>
+											{stop.status}
+										</span>
+									</div>
 									<p class="mt-1 text-xs text-slate-500">
 										{stop.latitude.toFixed(5)}, {stop.longitude.toFixed(5)}
 										{#if stop.zoneId}
 											• Zone {stop.zoneId}
 										{/if}
 									</p>
+									{#if stop.status !== 'pending'}
+										<p class="mt-2 text-xs font-medium text-slate-500">
+											Handled {stop.completedAt ? new Date(stop.completedAt).toLocaleString() : 'already'}.
+										</p>
+									{/if}
 								</div>
 
 								<div class="flex flex-wrap gap-2">
@@ -514,18 +562,18 @@
 									<button
 										type="button"
 										onclick={() => markCurrentStop(stop.id, 'done')}
-										disabled={stop.status !== 'pending'}
+										disabled={stop.status !== 'pending' || updatingStopId === stop.id}
 										class="rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
 									>
-										Done
+										{updatingStopId === stop.id ? 'Saving…' : 'Done'}
 									</button>
 									<button
 										type="button"
 										onclick={() => markCurrentStop(stop.id, 'skipped')}
-										disabled={stop.status !== 'pending'}
+										disabled={stop.status !== 'pending' || updatingStopId === stop.id}
 										class="rounded-full bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
 									>
-										Skipped
+										{updatingStopId === stop.id ? 'Saving…' : 'Skipped'}
 									</button>
 								</div>
 							</div>
