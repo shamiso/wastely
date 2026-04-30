@@ -13,7 +13,7 @@ import {
 } from '$lib/server/db/schema';
 import { toYmdDate } from '$lib/server/services/date.service';
 import { refreshZoneForecasts } from '$lib/server/services/forecast.service';
-import { resolveZoneFromCoordinates } from '$lib/server/services/geo.service';
+import { getOsrmRouteSnapshot, resolveZoneFromCoordinates } from '$lib/server/services/geo.service';
 import { getZoneOperationalSignals } from '$lib/server/services/intelligence.service';
 import { getOsrmTripDistanceKm } from '$lib/server/services/geo.service';
 import { ensureReferenceData } from '$lib/server/services/reference-data.service';
@@ -35,6 +35,7 @@ type RouteMetadata = {
 	congestionScore?: number;
 	blockedLegs?: number;
 	issueIds?: Array<number | string>;
+	nextStopEtaMinutes?: number;
 };
 
 export type DispatchDriver = {
@@ -99,6 +100,31 @@ function parseJson<T>(value: string | null): T | null {
 	} catch {
 		return null;
 	}
+}
+
+async function buildPersistedRouteSnapshot(
+	points: Array<{ lat: number; lng: number }>,
+	routePlan: {
+		geometry: Array<[number, number]>;
+		plannedDistanceKm: number;
+		estimatedDurationMinutes: number;
+		legDurationsMinutes: number[];
+	}
+) {
+	const osrmRoute = await getOsrmRouteSnapshot(points);
+
+	return {
+		distanceKm:
+			osrmRoute?.distanceKm ??
+			(await getOsrmTripDistanceKm(points)) ??
+			routePlan.plannedDistanceKm ??
+			estimateDistance(points),
+		durationMinutes: osrmRoute?.durationMinutes ?? routePlan.estimatedDurationMinutes,
+		routeGeometry: osrmRoute?.geometry ?? {
+			type: 'LineString' as const,
+			coordinates: routePlan.geometry.map(([lat, lng]) => [lng, lat] as [number, number])
+		}
+	};
 }
 
 async function listRecentRouteIssues() {
@@ -296,13 +322,10 @@ async function rebuildPlannedRunRoute(input: {
 		)
 		.returning();
 
-	const osrmDistance =
-		(await getOsrmTripDistanceKm(
-			insertedStops.map((stop) => ({ lat: stop.latitude, lng: stop.longitude }))
-		)) ??
-		routePlan.plannedDistanceKm ??
-		estimateDistance(insertedStops.map((stop) => ({ lat: stop.latitude, lng: stop.longitude })));
-	const firstStop = insertedStops[0];
+	const persistedRoute = await buildPersistedRouteSnapshot(
+		insertedStops.map((stop) => ({ lat: stop.latitude, lng: stop.longitude })),
+		routePlan
+	);
 	const lastStop = insertedStops[insertedStops.length - 1];
 
 	const [updatedRun] = await db
@@ -310,23 +333,21 @@ async function rebuildPlannedRunRoute(input: {
 		.set({
 			wardId: input.wardId,
 			driverUserId: input.driverUserId,
-			plannedDistanceKm: osrmDistance,
-			originLatitude: firstStop?.latitude ?? null,
-			originLongitude: firstStop?.longitude ?? null,
+			plannedDistanceKm: persistedRoute.distanceKm,
+			originLatitude: null,
+			originLongitude: null,
 			destinationLatitude: lastStop?.latitude ?? null,
 			destinationLongitude: lastStop?.longitude ?? null,
-			estimatedDurationMinutes: routePlan.estimatedDurationMinutes,
-			routeGeometryJson: JSON.stringify({
-				type: 'LineString',
-				coordinates: routePlan.geometry.map(([lat, lng]) => [lng, lat])
-			}),
+			estimatedDurationMinutes: persistedRoute.durationMinutes,
+			routeGeometryJson: JSON.stringify(persistedRoute.routeGeometry),
 			optimizerMetadataJson: JSON.stringify({
 				model: 'condition-aware-nn-v2',
 				legDurationsMinutes: routePlan.legDurationsMinutes,
 				riskScore: routePlan.metadata.riskScore,
 				congestionScore: routePlan.metadata.congestionScore,
 				blockedLegs: routePlan.metadata.blockedLegs,
-				issueIds: routePlan.metadata.issueIds
+				issueIds: routePlan.metadata.issueIds,
+				nextStopEtaMinutes: routePlan.legDurationsMinutes[0] ?? persistedRoute.durationMinutes
 			}),
 			updatedAt: Date.now()
 		})
@@ -460,33 +481,30 @@ export async function generateDailyRuns(input: RunGenerationInput = {}) {
 
 		await db.insert(routeStop).values(stops);
 
-		const osrmDistance =
-			(await getOsrmTripDistanceKm(stops.map((stop) => ({ lat: stop.latitude, lng: stop.longitude })))) ??
-			routePlan.plannedDistanceKm ??
-			estimateDistance(stops.map((stop) => ({ lat: stop.latitude, lng: stop.longitude })));
-		const firstStop = stops[0];
+		const persistedRoute = await buildPersistedRouteSnapshot(
+			stops.map((stop) => ({ lat: stop.latitude, lng: stop.longitude })),
+			routePlan
+		);
 		const lastStop = stops[stops.length - 1];
 
 		await db
 			.update(routeRun)
 			.set({
-				plannedDistanceKm: osrmDistance,
-				originLatitude: firstStop?.latitude ?? null,
-				originLongitude: firstStop?.longitude ?? null,
+				plannedDistanceKm: persistedRoute.distanceKm,
+				originLatitude: null,
+				originLongitude: null,
 				destinationLatitude: lastStop?.latitude ?? null,
 				destinationLongitude: lastStop?.longitude ?? null,
-				estimatedDurationMinutes: routePlan.estimatedDurationMinutes,
-				routeGeometryJson: JSON.stringify({
-					type: 'LineString',
-					coordinates: routePlan.geometry.map(([lat, lng]) => [lng, lat])
-				}),
+				estimatedDurationMinutes: persistedRoute.durationMinutes,
+				routeGeometryJson: JSON.stringify(persistedRoute.routeGeometry),
 				optimizerMetadataJson: JSON.stringify({
 					model: 'condition-aware-nn-v2',
 					legDurationsMinutes: routePlan.legDurationsMinutes,
 					riskScore: routePlan.metadata.riskScore,
 					congestionScore: routePlan.metadata.congestionScore,
 					blockedLegs: routePlan.metadata.blockedLegs,
-					issueIds: routePlan.metadata.issueIds
+					issueIds: routePlan.metadata.issueIds,
+					nextStopEtaMinutes: routePlan.legDurationsMinutes[0] ?? persistedRoute.durationMinutes
 				}),
 				updatedAt: Date.now()
 			})

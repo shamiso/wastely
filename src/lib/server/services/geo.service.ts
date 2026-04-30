@@ -28,7 +28,19 @@ export type AddressSuggestion = {
 	zoneConfidence: ZoneResolution['confidence'] | null;
 };
 
+export type RouteGeometry = {
+	type: 'LineString';
+	coordinates: Array<[number, number]>;
+};
+
+export type OsrmRouteSnapshot = {
+	geometry: RouteGeometry;
+	distanceKm: number;
+	durationMinutes: number;
+};
+
 const EARTH_RADIUS_KM = 6371;
+const DEFAULT_OSRM_BASE_URL = 'https://router.project-osrm.org';
 
 function toRad(value: number): number {
 	return (value * Math.PI) / 180;
@@ -283,7 +295,7 @@ export async function resolveZoneFromCoordinates(
 }
 
 export async function getOsrmTripDistanceKm(points: Array<Pick<GeoPoint, 'lat' | 'lng'>>): Promise<number | null> {
-	const baseUrl = env.OSRM_BASE_URL;
+	const baseUrl = env.OSRM_BASE_URL || DEFAULT_OSRM_BASE_URL;
 	if (!baseUrl || points.length < 2) return null;
 
 	const coordinates = points.map((point) => `${point.lng},${point.lat}`).join(';');
@@ -298,6 +310,43 @@ export async function getOsrmTripDistanceKm(points: Array<Pick<GeoPoint, 'lat' |
 		const distanceMeters = payload.routes?.[0]?.distance;
 		if (!distanceMeters) return null;
 		return distanceMeters / 1000;
+	} catch {
+		return null;
+	}
+}
+
+export async function getOsrmRouteSnapshot(
+	points: Array<Pick<GeoPoint, 'lat' | 'lng'>>
+): Promise<OsrmRouteSnapshot | null> {
+	const baseUrl = env.OSRM_BASE_URL || DEFAULT_OSRM_BASE_URL;
+	if (!baseUrl || points.length < 2) return null;
+
+	const coordinates = points.map((point) => `${point.lng},${point.lat}`).join(';');
+	const url = `${baseUrl.replace(/\/+$/, '')}/route/v1/driving/${coordinates}?overview=full&geometries=geojson&steps=false`;
+
+	try {
+		const response = await fetch(url);
+		if (!response.ok) return null;
+		const payload = (await response.json()) as {
+			routes?: Array<{
+				distance?: number;
+				duration?: number;
+				geometry?: {
+					coordinates?: Array<[number, number]>;
+				};
+			}>;
+		};
+		const route = payload.routes?.[0];
+		if (!route?.geometry?.coordinates || route.geometry.coordinates.length < 2) return null;
+
+		return {
+			geometry: {
+				type: 'LineString',
+				coordinates: route.geometry.coordinates
+			},
+			distanceKm: Number(((route.distance ?? 0) / 1000).toFixed(2)),
+			durationMinutes: Number(((route.duration ?? 0) / 60).toFixed(2))
+		};
 	} catch {
 		return null;
 	}

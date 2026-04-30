@@ -1,12 +1,52 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
+	import { haversineDistanceKm } from '$lib/domain/route-optimizer';
 	import InsightMap from '$lib/components/InsightMap.svelte';
 	import {
 		finishRun,
 		getCurrentRun,
+		getLiveNavigationRoute,
 		startRun,
 		submitRunSummaryEntry,
 		submitStop
 	} from '$lib/api/driver-ops.remote';
+
+	type DriverLocation = {
+		latitude: number;
+		longitude: number;
+		accuracy: number;
+		timestamp: number;
+	};
+
+	type LiveNavigationSnapshot = {
+		liveRoute: {
+			model: string;
+			generatedAt: number;
+			routeGeometry: {
+				type: 'LineString';
+				coordinates: Array<[number, number]>;
+			};
+			legDurationsMinutes: number[];
+			remainingDistanceKm: number;
+			remainingDurationMinutes: number;
+			baselineRemainingMinutes: number;
+			etaDeltaMinutes: number;
+			nextStopEtaMinutes: number;
+			expectedCompletionAt: string | null;
+			rerouted: boolean;
+			liveStopIds: number[];
+			riskScore: number;
+			congestionScore: number;
+			blockedLegs: number;
+			issueIds: Array<number | string>;
+			activeIssueCount: number;
+			currentLocation: {
+				latitude: number;
+				longitude: number;
+			} | null;
+		} | null;
+		liveStopIds: number[];
+	};
 
 	const currentRun = getCurrentRun();
 	let collectionVolumeKg = $state('');
@@ -19,10 +59,29 @@
 	let updatingStopId = $state<number | null>(null);
 	let checklistMessage = $state('');
 	let checklistTone = $state<'success' | 'danger'>('success');
+	let driverLocation = $state<DriverLocation | null>(null);
+	let locationState = $state<'idle' | 'locating' | 'tracking' | 'unsupported' | 'denied' | 'error'>('idle');
+	let locationMessage = $state('');
+	let navigationMessage = $state('');
+	let liveNavigation = $state<LiveNavigationSnapshot | null>(null);
+	let liveNavigationLoading = $state(false);
+	let lastNavigationOrigin = $state<{
+		runId: number;
+		latitude: number;
+		longitude: number;
+		timestamp: number;
+	} | null>(null);
+	let navigationRequestToken = 0;
+	let lastLiveNavigationTriggerKey = '';
 
 	async function startCurrentRun(runId: number) {
-		await startRun({ runId });
+		await startRun({
+			runId,
+			latitude: driverLocation?.latitude,
+			longitude: driverLocation?.longitude
+		});
 		await currentRun.refresh();
+		await refreshLiveNavigation(true);
 	}
 
 	async function finishCurrentRun(runId: number) {
@@ -30,6 +89,7 @@
 		try {
 			await finishRun({ runId });
 			await currentRun.refresh();
+			liveNavigation = null;
 		} finally {
 			finishingRun = false;
 		}
@@ -47,6 +107,7 @@
 			checklistTone = 'success';
 			checklistMessage = `Stop ${stopId} marked ${status === 'done' ? 'done' : 'skipped'}.`;
 			await currentRun.refresh();
+			await refreshLiveNavigation(true);
 		} catch (error) {
 			checklistTone = 'danger';
 			checklistMessage =
@@ -104,12 +165,28 @@
 		return `${rounded > 0 ? '+' : ''}${rounded} min`;
 	}
 
+	function formatAccuracy(value: number | null | undefined) {
+		if (value === null || value === undefined || !Number.isFinite(value)) return 'Awaiting GPS';
+		return `${Math.round(value)} m`;
+	}
+
 	function trafficWeight(issue: {
 		severity: 'low' | 'medium' | 'high';
 		trafficLevel: 'light' | 'moderate' | 'heavy' | 'standstill';
 	}) {
-		const base = issue.trafficLevel === 'standstill' ? 8 : issue.trafficLevel === 'heavy' ? 7 : issue.trafficLevel === 'moderate' ? 5 : 4;
-		return issue.severity === 'high' ? base + 1 : issue.severity === 'low' ? Math.max(3, base - 1) : base;
+		const base =
+			issue.trafficLevel === 'standstill'
+				? 8
+				: issue.trafficLevel === 'heavy'
+					? 7
+					: issue.trafficLevel === 'moderate'
+						? 5
+						: 4;
+		return issue.severity === 'high'
+			? base + 1
+			: issue.severity === 'low'
+				? Math.max(3, base - 1)
+				: base;
 	}
 
 	function sortStopsByDynamicOrder(
@@ -130,7 +207,10 @@
 			if (a.status === 'pending' && b.status !== 'pending') return -1;
 			if (a.status !== 'pending' && b.status === 'pending') return 1;
 			if (a.status !== 'pending' && b.status !== 'pending') return a.sequence - b.sequence;
-			return (liveOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (liveOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER);
+			return (
+				(liveOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+				(liveOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+			);
 		});
 	}
 
@@ -140,30 +220,217 @@
 		return 'bg-sky-100 text-sky-700';
 	}
 
+	function handleLocationError(error: GeolocationPositionError) {
+		liveNavigation = null;
+		if (error.code === error.PERMISSION_DENIED) {
+			locationState = 'denied';
+			locationMessage = 'Location access is off. Enable it to follow the live route.';
+			return;
+		}
+
+		locationState = 'error';
+		locationMessage = error.message || 'Could not read the device location.';
+	}
+
+	async function refreshLiveNavigation(force = false) {
+		const run = currentRun.current;
+		const location = driverLocation;
+		if (!run || !location || run.run.status === 'completed') {
+			if (!run || run?.run.status === 'completed') liveNavigation = null;
+			return;
+		}
+
+		const now = Date.now();
+		if (!force && lastNavigationOrigin && lastNavigationOrigin.runId === run.run.id) {
+			const distanceMovedKm = haversineDistanceKm(
+				{ lat: lastNavigationOrigin.latitude, lng: lastNavigationOrigin.longitude },
+				{ lat: location.latitude, lng: location.longitude }
+			);
+			const ageMs = now - lastNavigationOrigin.timestamp;
+			if (distanceMovedKm < 0.05 && ageMs < 15000) return;
+		}
+
+		const requestToken = ++navigationRequestToken;
+		liveNavigationLoading = true;
+
+		try {
+			const snapshot = (await getLiveNavigationRoute({
+				runId: run.run.id,
+				latitude: location.latitude,
+				longitude: location.longitude
+			})) as LiveNavigationSnapshot;
+
+			if (requestToken !== navigationRequestToken) return;
+
+			liveNavigation = snapshot;
+			navigationMessage = '';
+			lastNavigationOrigin = {
+				runId: run.run.id,
+				latitude: location.latitude,
+				longitude: location.longitude,
+				timestamp: now
+			};
+		} catch (error) {
+			if (requestToken !== navigationRequestToken) return;
+			navigationMessage =
+				error instanceof Error && error.message
+					? error.message
+					: 'Live navigation could not be updated.';
+		} finally {
+			if (requestToken === navigationRequestToken) {
+				liveNavigationLoading = false;
+			}
+		}
+	}
+
 	$effect(() => {
 		if (!currentRun.current || currentRun.current.run.status === 'completed') return;
 		const handle = window.setInterval(() => {
 			void currentRun.refresh();
+			void refreshLiveNavigation(true);
 		}, 30000);
 
 		return () => window.clearInterval(handle);
 	});
 
-	function routeLines() {
+	onMount(() => {
+		if (!navigator.geolocation) {
+			locationState = 'unsupported';
+			locationMessage = 'Live location is not supported on this device.';
+			return;
+		}
+
+		const applyPosition = (position: GeolocationPosition) => {
+			driverLocation = {
+				latitude: Number(position.coords.latitude.toFixed(6)),
+				longitude: Number(position.coords.longitude.toFixed(6)),
+				accuracy: position.coords.accuracy,
+				timestamp: position.timestamp
+			};
+			locationState = 'tracking';
+			locationMessage = '';
+			void refreshLiveNavigation();
+		};
+
+		locationState = 'locating';
+		navigator.geolocation.getCurrentPosition(
+			(position) => applyPosition(position),
+			(error) => handleLocationError(error),
+			{
+				enableHighAccuracy: true,
+				maximumAge: 0,
+				timeout: 10000
+			}
+		);
+
+		const watchId = navigator.geolocation.watchPosition(
+			(position) => applyPosition(position),
+			(error) => handleLocationError(error),
+			{
+				enableHighAccuracy: true,
+				maximumAge: 10000,
+				timeout: 15000
+			}
+		);
+
+		return () => {
+			navigator.geolocation.clearWatch(watchId);
+		};
+	});
+
+	$effect(() => {
+		const run = currentRun.current;
+		const location = driverLocation;
+		if (!run || !location || run.run.status === 'completed') return;
+
+		const triggerKey = `${run.run.id}:${run.run.status}:${run.stops
+			.map((stop) => `${stop.id}:${stop.status}`)
+			.join('|')}:${location.latitude}:${location.longitude}:${location.timestamp}`;
+
+		if (triggerKey === lastLiveNavigationTriggerKey) return;
+		lastLiveNavigationTriggerKey = triggerKey;
+
+		queueMicrotask(() => {
+			void refreshLiveNavigation();
+		});
+	});
+
+	function buildRouteRequests() {
 		const run = currentRun.current;
 		if (!run) return [];
-		const geometry = run.liveRoute?.routeGeometry ?? run.routeGeometry;
-		if (!geometry) return [];
+
+		const points: Array<[number, number]> = [];
+
+		if (driverLocation) {
+			points.push([driverLocation.latitude, driverLocation.longitude]);
+		} else if (
+			run.run.originLatitude !== null &&
+			run.run.originLongitude !== null
+		) {
+			points.push([run.run.originLatitude, run.run.originLongitude]);
+		}
+
+		const pendingRouteStops = displayedStops.filter((stop) => stop.status === 'pending');
+		for (const stop of pendingRouteStops) {
+			points.push([stop.latitude, stop.longitude]);
+		}
+
+		if (points.length < 2) {
+			const fallbackStops = displayedStops
+				.filter((stop) => stop.status === 'pending')
+				.map((stop) => [stop.latitude, stop.longitude] as [number, number]);
+
+			if (fallbackStops.length >= 2) {
+				return [
+					{
+						points: fallbackStops,
+						label: liveRoute?.rerouted ? `Run #${run.run.id} live reroute` : `Run #${run.run.id}`,
+						color: '#0ea5e9',
+						weight: liveRoute?.rerouted ? 6 : 5
+					}
+				];
+			}
+
+			return [];
+		}
 
 		return [
 			{
-				points: geometry.coordinates.map(([lng, lat]) => [lat, lng] as [number, number]),
-				label: run.liveRoute?.rerouted ? `Run #${run.run.id} live reroute` : `Run #${run.run.id}`,
+				points,
+				label: liveRoute?.rerouted ? `Run #${run.run.id} live reroute` : `Run #${run.run.id}`,
 				color: '#0ea5e9',
-				weight: run.liveRoute?.rerouted ? 6 : 5
-			},
+				weight: liveRoute?.rerouted ? 6 : 5
+			}
+		];
+	}
+
+	function routeLines() {
+		const run = currentRun.current;
+		if (!run) return [];
+
+		const geometry = liveRoute?.routeGeometry ?? run.routeGeometry;
+		const fallbackGeometryLine =
+			mapRouteRequests.length === 0 && geometry && geometry.coordinates.length >= 2
+				? [
+						{
+							points: geometry.coordinates.map(([lng, lat]) => [lat, lng] as [number, number]),
+							label: liveRoute?.rerouted ? `Run #${run.run.id} saved route` : `Run #${run.run.id}`,
+							color: '#0ea5e9',
+							weight: liveRoute?.rerouted ? 6 : 5
+						}
+					]
+				: [];
+
+		return [
+			...fallbackGeometryLine,
 			...run.roadIssues
-				.filter((issue) => issue.startLatitude !== null && issue.startLongitude !== null && issue.endLatitude !== null && issue.endLongitude !== null)
+				.filter(
+					(issue) =>
+						issue.startLatitude !== null &&
+						issue.startLongitude !== null &&
+						issue.endLatitude !== null &&
+						issue.endLongitude !== null
+				)
 				.map((issue) => ({
 					points: [
 						[issue.startLatitude as number, issue.startLongitude as number],
@@ -184,7 +451,7 @@
 
 	function routeMarkers() {
 		if (!currentRun.current) return [];
-		const nextDynamicStopId = currentRun.current.liveStopIds?.[0] ?? null;
+		const nextDynamicStopId = liveStopIds[0] ?? null;
 
 		return [
 			...currentRun.current.stops.map((stop) => ({
@@ -195,7 +462,12 @@
 						? `Next stop ${stop.sequence} • ${stop.status}`
 						: `Stop ${stop.sequence} • ${stop.status}`,
 				color: '#0f172a',
-				fillColor: stop.status === 'done' ? '#22c55e' : stop.status === 'skipped' ? '#f59e0b' : '#38bdf8',
+				fillColor:
+					stop.status === 'done'
+						? '#22c55e'
+						: stop.status === 'skipped'
+							? '#f59e0b'
+							: '#38bdf8',
 				radius: stop.id === nextDynamicStopId ? 9 : 7
 			})),
 			...currentRun.current.roadIssues
@@ -211,17 +483,56 @@
 		];
 	}
 
-	let liveRoute = $derived(currentRun.current?.liveRoute ?? null);
+	function mapFocusPoints() {
+		const focus: Array<[number, number]> = [];
+
+		if (driverLocation) {
+			focus.push([driverLocation.latitude, driverLocation.longitude]);
+		}
+
+		for (const stop of displayedStops.filter((item) => item.status === 'pending').slice(0, 2)) {
+			focus.push([stop.latitude, stop.longitude]);
+		}
+
+		if (focus.length === 0 && currentRun.current) {
+			for (const stop of currentRun.current.stops.slice(0, 2)) {
+				focus.push([stop.latitude, stop.longitude]);
+			}
+		}
+
+		return focus;
+	}
+
+	let liveRoute = $derived(liveNavigation?.liveRoute ?? currentRun.current?.liveRoute ?? null);
+	let liveStopIds = $derived(liveNavigation?.liveStopIds ?? currentRun.current?.liveStopIds ?? []);
 	let displayedStops = $derived(
-		currentRun.current
-			? sortStopsByDynamicOrder(currentRun.current.stops, currentRun.current.liveStopIds ?? [])
-			: []
+		currentRun.current ? sortStopsByDynamicOrder(currentRun.current.stops, liveStopIds) : []
 	);
+	let mapRouteRequests = $derived(buildRouteRequests());
 	let optimizerLegs = $derived(
 		liveRoute?.legDurationsMinutes ?? currentRun.current?.optimizerMetadata?.legDurationsMinutes ?? []
 	);
+	let plannedRemainingEtaMinutes = $derived(
+		optimizerLegs.length > 0
+			? optimizerLegs.reduce((sum, value) => sum + value, 0)
+			: currentRun.current?.run.estimatedDurationMinutes ?? 0
+	);
+	let plannedNextStopEtaMinutes = $derived(
+		liveRoute?.nextStopEtaMinutes ??
+			currentRun.current?.optimizerMetadata?.nextStopEtaMinutes ??
+			optimizerLegs[0] ??
+			currentRun.current?.run.estimatedDurationMinutes ??
+			0
+	);
+	let displayRemainingEtaMinutes = $derived(liveRoute?.remainingDurationMinutes ?? plannedRemainingEtaMinutes);
+	let displayExpectedCompletionAt = $derived(
+		liveRoute?.expectedCompletionAt ??
+			(displayRemainingEtaMinutes > 0
+				? new Date(Date.now() + displayRemainingEtaMinutes * 60_000).toISOString()
+				: null)
+	);
 	let nextPendingStop = $derived(
-		currentRun.current?.stops.find((stop) => stop.id === (currentRun.current?.liveStopIds?.[0] ?? -1)) ??
+		currentRun.current?.stops.find((stop) => stop.id === (liveStopIds[0] ?? -1)) ??
 			currentRun.current?.stops.find((stop) => stop.status === 'pending') ??
 			null
 	);
@@ -236,12 +547,12 @@
 			? displayedStops
 					.filter((stop) => stop.status === 'pending')
 					.map((stop, index) => ({
-					stop,
-					legMinutes: optimizerLegs[index] ?? 0,
-					cumulativeMinutes: optimizerLegs
-						.slice(0, index + 1)
-						.reduce((sum, value) => sum + value, 0)
-				}))
+						stop,
+						legMinutes: optimizerLegs[index] ?? 0,
+						cumulativeMinutes: optimizerLegs
+							.slice(0, index + 1)
+							.reduce((sum, value) => sum + value, 0)
+					}))
 			: []
 	);
 </script>
@@ -316,12 +627,12 @@
 					<div class="rounded-[1.3rem] bg-gradient-to-br from-emerald-400 to-teal-600 p-4 text-white">
 						<p class="text-xs uppercase tracking-[0.18em] text-white/70">Next stop ETA</p>
 						<p class="mt-2 text-3xl font-semibold">
-							{liveRoute?.nextStopEtaMinutes?.toFixed(0) ?? '0'}m
+							{plannedNextStopEtaMinutes.toFixed(0)}m
 						</p>
 					</div>
 					<div class="rounded-[1.3rem] bg-gradient-to-br from-violet-500 to-indigo-600 p-4 text-white">
 						<p class="text-xs uppercase tracking-[0.18em] text-white/70">Expected arrival</p>
-						<p class="mt-2 text-2xl font-semibold">{etaLabel(liveRoute?.expectedCompletionAt)}</p>
+						<p class="mt-2 text-2xl font-semibold">{etaLabel(displayExpectedCompletionAt)}</p>
 					</div>
 					<div class="rounded-[1.3rem] bg-gradient-to-br from-amber-300 to-orange-500 p-4 text-slate-950">
 						<p class="text-xs uppercase tracking-[0.18em] text-slate-900/60">Time taken</p>
@@ -330,12 +641,23 @@
 					<div class="rounded-[1.3rem] bg-gradient-to-br from-emerald-300 to-lime-500 p-4 text-slate-950">
 						<p class="text-xs uppercase tracking-[0.18em] text-slate-900/60">Remaining ETA</p>
 						<p class="mt-2 text-3xl font-semibold">
-							{liveRoute?.remainingDurationMinutes?.toFixed(0) ?? currentRun.current.run.estimatedDurationMinutes.toFixed(0)}m
+							{displayRemainingEtaMinutes.toFixed(0)}m
 						</p>
 					</div>
 					<div class="rounded-[1.3rem] bg-gradient-to-br from-rose-300 to-pink-500 p-4 text-slate-950">
 						<p class="text-xs uppercase tracking-[0.18em] text-slate-900/60">Road issues</p>
 						<p class="mt-2 text-3xl font-semibold">{currentRun.current.roadIssues.length}</p>
+					</div>
+					<div class="rounded-[1.3rem] bg-gradient-to-br from-slate-800 to-slate-950 p-4 text-white">
+						<p class="text-xs uppercase tracking-[0.18em] text-white/60">Live location</p>
+						<p class="mt-2 text-2xl font-semibold">
+							{locationState === 'tracking' ? 'Tracking' : 'Not live'}
+						</p>
+						<p class="mt-2 text-sm text-white/72">
+							{locationState === 'tracking'
+								? `Accuracy ${formatAccuracy(driverLocation?.accuracy)}`
+								: locationMessage || 'Enable GPS to navigate from your current position.'}
+						</p>
 					</div>
 				</div>
 			</section>
@@ -347,7 +669,7 @@
 							Route map
 						</h2>
 						<p class="text-sm text-slate-600">
-							Live optimum path plus traffic-weighted route-condition segments.
+							Live route from your current position, plus traffic-weighted condition segments.
 						</p>
 					</div>
 					{#if liveRoute || currentRun.current.optimizerMetadata}
@@ -363,13 +685,42 @@
 					</div>
 				{/if}
 
+				{#if locationMessage}
+					<div class="mt-4 rounded-[1.35rem] border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+						{locationMessage}
+					</div>
+				{/if}
+
+				{#if navigationMessage}
+					<div class="mt-4 rounded-[1.35rem] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+						{navigationMessage}
+					</div>
+				{/if}
+
 				<div class="mt-4">
 					<InsightMap
 						ariaLabel="Driver route dashboard map"
+						focusPoints={mapFocusPoints()}
+						userLocation={
+							driverLocation
+								? {
+										lat: driverLocation.latitude,
+										lng: driverLocation.longitude,
+										accuracy: driverLocation.accuracy
+									}
+								: null
+						}
 						markers={routeMarkers()}
 						polylines={routeLines()}
+						routeRequests={mapRouteRequests}
 					/>
 				</div>
+
+				{#if liveNavigationLoading}
+					<p class="mt-3 text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+						Refreshing live navigation…
+					</p>
+				{/if}
 			</section>
 
 			<section class="rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
@@ -408,7 +759,7 @@
 						<div class="rounded-[1.35rem] bg-gradient-to-br from-emerald-400 to-teal-600 p-4 text-white">
 							<p class="text-xs uppercase tracking-[0.18em] text-white/70">Expected completion</p>
 							<p class="mt-2 text-3xl font-semibold">
-								{etaLabel(liveRoute?.expectedCompletionAt)}
+								{etaLabel(displayExpectedCompletionAt)}
 							</p>
 							<p class="mt-2 text-sm text-white/78">
 								Remaining distance {(liveRoute?.remainingDistanceKm ?? currentRun.current.run.plannedDistanceKm).toFixed(1)} km
@@ -525,7 +876,7 @@
 									<div class="flex flex-wrap items-center gap-2">
 										<p class="font-semibold text-slate-900">
 										Stop {stop.sequence}
-										{#if stop.id === (currentRun.current.liveStopIds?.[0] ?? -1)}
+										{#if stop.id === (liveStopIds[0] ?? -1)}
 											<span class="ml-2 rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-cyan-700">
 												Next
 											</span>
@@ -565,7 +916,7 @@
 										disabled={stop.status !== 'pending' || updatingStopId === stop.id}
 										class="rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
 									>
-										{updatingStopId === stop.id ? 'Saving…' : 'Done'}
+										{updatingStopId === stop.id ? 'Saving…' : 'I have arrived'}
 									</button>
 									<button
 										type="button"
@@ -573,7 +924,7 @@
 										disabled={stop.status !== 'pending' || updatingStopId === stop.id}
 										class="rounded-full bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
 									>
-										{updatingStopId === stop.id ? 'Saving…' : 'Skipped'}
+										{updatingStopId === stop.id ? 'Saving…' : 'Skip stop'}
 									</button>
 								</div>
 							</div>

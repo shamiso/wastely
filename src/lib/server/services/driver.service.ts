@@ -7,6 +7,7 @@ import {
 	type RoutePoint
 } from '$lib/domain/route-optimizer';
 import { db } from '$lib/server/db';
+import { getOsrmRouteSnapshot } from '$lib/server/services/geo.service';
 import {
 	citizenReport,
 	driverEventLog,
@@ -62,6 +63,14 @@ function roundCoordinate(value: number | undefined | null) {
 	return Number(value.toFixed(6));
 }
 
+function coordinatesMatch(
+	a: { latitude: number; longitude: number } | null,
+	b: { latitude: number; longitude: number } | null
+) {
+	if (!a || !b) return false;
+	return Math.abs(a.latitude - b.latitude) < 0.00001 && Math.abs(a.longitude - b.longitude) < 0.00001;
+}
+
 function calculateElapsedMinutes(run: typeof routeRun.$inferSelect) {
 	if (!run.startedAt) return 0;
 	const endTime = run.completedAt ?? Date.now();
@@ -84,8 +93,22 @@ async function listLiveRoadIssues(routeRunId: number, zoneIds: number[]) {
 
 function getRunAnchor(
 	run: typeof routeRun.$inferSelect,
-	stops: Array<typeof routeStop.$inferSelect>
+	stops: Array<typeof routeStop.$inferSelect>,
+	liveLocation?: {
+		latitude: number;
+		longitude: number;
+	} | null
 ): RoutePoint | null {
+	if (liveLocation) {
+		return {
+			id: 0,
+			lat: liveLocation.latitude,
+			lng: liveLocation.longitude,
+			zoneId: null,
+			label: 'Current location'
+		};
+	}
+
 	const completedStops = stops.filter((stop) => stop.status !== 'pending');
 	const lastCompletedStop = completedStops[completedStops.length - 1];
 
@@ -99,7 +122,28 @@ function getRunAnchor(
 		};
 	}
 
-	if (run.originLatitude !== null && run.originLongitude !== null) {
+	const firstPendingStop = stops.find((stop) => stop.status === 'pending');
+	const originMatchesFirstPending =
+		run.originLatitude !== null &&
+		run.originLongitude !== null &&
+		firstPendingStop !== undefined &&
+		coordinatesMatch(
+			{
+				latitude: run.originLatitude,
+				longitude: run.originLongitude
+			},
+			{
+				latitude: firstPendingStop.latitude,
+				longitude: firstPendingStop.longitude
+			}
+		);
+
+	if (
+		run.originLatitude !== null &&
+		run.originLongitude !== null &&
+		run.status !== 'planned' &&
+		!originMatchesFirstPending
+	) {
 		return {
 			id: 0,
 			lat: run.originLatitude,
@@ -109,16 +153,7 @@ function getRunAnchor(
 		};
 	}
 
-	const firstPendingStop = stops.find((stop) => stop.status === 'pending');
-	if (!firstPendingStop) return null;
-
-	return {
-		id: 0,
-		lat: firstPendingStop.latitude,
-		lng: firstPendingStop.longitude,
-		zoneId: firstPendingStop.zoneId,
-		label: `Stop ${firstPendingStop.sequence}`
-	};
+	return null;
 }
 
 function buildBaselineLegs(
@@ -146,9 +181,71 @@ function buildBaselineLegs(
 	return baselineLegs;
 }
 
+async function buildRouteGeometry(points: RoutePoint[]) {
+	if (points.length === 0) return null;
+
+	const osrmRoute = await getOsrmRouteSnapshot(
+		points.map((point) => ({
+			lat: point.lat,
+			lng: point.lng
+		}))
+	);
+
+	if (osrmRoute) {
+		return {
+			geometry: osrmRoute.geometry,
+			distanceKm: osrmRoute.distanceKm,
+			durationMinutes: osrmRoute.durationMinutes
+		};
+	}
+
+	return {
+		geometry: {
+			type: 'LineString' as const,
+			coordinates: points.map((point) => [point.lng, point.lat] as [number, number])
+		},
+		distanceKm: null,
+		durationMinutes: null
+	};
+}
+
+async function resolveRunDisplayGeometry(
+	stops: Array<typeof routeStop.$inferSelect>,
+	storedGeometry:
+		| {
+				type: 'LineString';
+				coordinates: Array<[number, number]>;
+		  }
+		| null
+) {
+	if (stops.length < 2) {
+		return storedGeometry;
+	}
+
+	if (storedGeometry && storedGeometry.coordinates.length > stops.length) {
+		return storedGeometry;
+	}
+
+	const routeGeometry = await buildRouteGeometry(
+		stops.map((stop) => ({
+			id: stop.id,
+			lat: stop.latitude,
+			lng: stop.longitude,
+			zoneId: stop.zoneId,
+			label: `Stop ${stop.sequence}`
+		}))
+	);
+
+	return routeGeometry?.geometry ?? storedGeometry;
+}
+
 async function buildLiveRouteSnapshot(
 	run: typeof routeRun.$inferSelect,
-	stops: Array<typeof routeStop.$inferSelect>
+	stops: Array<typeof routeStop.$inferSelect>,
+	liveLocation?: {
+		latitude: number;
+		longitude: number;
+	} | null
 ) {
 	const pendingStops = stops.filter((stop) => stop.status === 'pending');
 	if (pendingStops.length === 0) {
@@ -158,7 +255,7 @@ async function buildLiveRouteSnapshot(
 		};
 	}
 
-	const anchor = getRunAnchor(run, stops);
+	const anchor = getRunAnchor(run, stops, liveLocation);
 	if (!anchor) {
 		return {
 			liveRoute: null,
@@ -202,6 +299,7 @@ async function buildLiveRouteSnapshot(
 		issues,
 		departureHour
 	);
+	const geometrySnapshot = await buildRouteGeometry(routePlan.orderedPoints);
 	const liveStopIds = routePlan.orderedPoints.slice(1).map((point) => Number(point.id));
 	const baselineStopIds = pendingStops.map((stop) => stop.id);
 	const baselineLegDurationsMinutes = buildBaselineLegs(anchor, pendingStops, issues, departureHour);
@@ -217,12 +315,12 @@ async function buildLiveRouteSnapshot(
 		liveRoute: {
 			model: 'condition-aware-live-v1',
 			generatedAt: Date.now(),
-			routeGeometry: {
+			routeGeometry: geometrySnapshot?.geometry ?? {
 				type: 'LineString' as const,
 				coordinates: routePlan.geometry.map(([lat, lng]) => [lng, lat] as [number, number])
 			},
 			legDurationsMinutes: routePlan.legDurationsMinutes,
-			remainingDistanceKm: routePlan.plannedDistanceKm,
+			remainingDistanceKm: geometrySnapshot?.distanceKm ?? routePlan.plannedDistanceKm,
 			remainingDurationMinutes: Number(remainingDurationMinutes.toFixed(2)),
 			baselineRemainingMinutes: Number(baselineRemainingMinutes.toFixed(2)),
 			etaDeltaMinutes: Number((remainingDurationMinutes - baselineRemainingMinutes).toFixed(2)),
@@ -234,7 +332,13 @@ async function buildLiveRouteSnapshot(
 			congestionScore: routePlan.metadata.congestionScore,
 			blockedLegs: routePlan.metadata.blockedLegs,
 			issueIds: routePlan.metadata.issueIds,
-			activeIssueCount: rawIssues.length
+			activeIssueCount: rawIssues.length,
+			currentLocation: liveLocation
+				? {
+						latitude: liveLocation.latitude,
+						longitude: liveLocation.longitude
+					}
+				: null
 		},
 		liveStopIds
 	};
@@ -284,16 +388,18 @@ export async function getAssignedRun(driverUserId: string, runDate = toYmdDate()
 		.orderBy(desc(roadConditionReport.createdAt));
 
 	const { liveRoute, liveStopIds } = await buildLiveRouteSnapshot(run, stops);
+	const storedRouteGeometry =
+		parseJson<{
+			type: 'LineString';
+			coordinates: Array<[number, number]>;
+		}>(run.routeGeometryJson) ?? null;
+	const routeGeometry = await resolveRunDisplayGeometry(stops, storedRouteGeometry);
 
 	return {
 		run,
 		stops,
 		roadIssues,
-		routeGeometry:
-			parseJson<{
-				type: 'LineString';
-				coordinates: Array<[number, number]>;
-			}>(run.routeGeometryJson) ?? null,
+		routeGeometry,
 		optimizerMetadata: parseJson<{
 			model?: string;
 			legDurationsMinutes?: number[];
@@ -301,6 +407,7 @@ export async function getAssignedRun(driverUserId: string, runDate = toYmdDate()
 			congestionScore?: number;
 			blockedLegs?: number;
 			issueIds?: Array<number | string>;
+			nextStopEtaMinutes?: number;
 		}>(run.optimizerMetadataJson) ?? null,
 		liveRoute,
 		liveStopIds,
@@ -315,7 +422,42 @@ export async function getAssignedRun(driverUserId: string, runDate = toYmdDate()
 	};
 }
 
-export async function startAssignedRun(driverUserId: string, runId: number) {
+export async function getAssignedRunLiveNavigation(input: {
+	driverUserId: string;
+	runId: number;
+	latitude: number;
+	longitude: number;
+}) {
+	if (!Number.isFinite(input.latitude) || !Number.isFinite(input.longitude)) {
+		throw error(400, 'A valid driver location is required.');
+	}
+
+	const [run] = await db.select().from(routeRun).where(eq(routeRun.id, input.runId)).limit(1);
+	if (!run) throw error(404, 'Route run not found');
+	if (run.driverUserId && run.driverUserId !== input.driverUserId) {
+		throw error(403, 'You are not assigned to this run.');
+	}
+
+	const stops = await db
+		.select()
+		.from(routeStop)
+		.where(eq(routeStop.routeRunId, run.id))
+		.orderBy(asc(routeStop.sequence));
+
+	return buildLiveRouteSnapshot(run, stops, {
+		latitude: input.latitude,
+		longitude: input.longitude
+	});
+}
+
+export async function startAssignedRun(
+	driverUserId: string,
+	runId: number,
+	startLocation?: {
+		latitude?: number;
+		longitude?: number;
+	}
+) {
 	const [run] = await db.select().from(routeRun).where(eq(routeRun.id, runId)).limit(1);
 	if (!run) throw error(404, 'Route run not found');
 	if (run.driverUserId && run.driverUserId !== driverUserId) {
@@ -329,6 +471,14 @@ export async function startAssignedRun(driverUserId: string, runId: number) {
 		.set({
 			status: 'in_progress',
 			startedAt: run.startedAt ?? timestamp,
+			originLatitude:
+				startLocation?.latitude !== undefined && startLocation?.latitude !== null
+					? roundCoordinate(startLocation.latitude)
+					: run.originLatitude,
+			originLongitude:
+				startLocation?.longitude !== undefined && startLocation?.longitude !== null
+					? roundCoordinate(startLocation.longitude)
+					: run.originLongitude,
 			updatedAt: timestamp
 		})
 		.where(eq(routeRun.id, runId))
@@ -339,7 +489,15 @@ export async function startAssignedRun(driverUserId: string, runId: number) {
 		driverUserId,
 		eventType: 'run_started',
 		payloadJson: JSON.stringify({
-			startedAt: timestamp
+			startedAt: timestamp,
+			originLatitude:
+				startLocation?.latitude !== undefined && startLocation?.latitude !== null
+					? roundCoordinate(startLocation.latitude)
+					: run.originLatitude,
+			originLongitude:
+				startLocation?.longitude !== undefined && startLocation?.longitude !== null
+					? roundCoordinate(startLocation.longitude)
+					: run.originLongitude
 		})
 	});
 
@@ -646,6 +804,7 @@ export async function listDriverRouteHistory(driverUserId: string, limit = 8) {
 				congestionScore?: number;
 				blockedLegs?: number;
 				issueIds?: Array<number | string>;
+				nextStopEtaMinutes?: number;
 			}>(run.optimizerMetadataJson) ?? null,
 			summary: summaryRow
 				? {

@@ -3,6 +3,7 @@ import { requireExactRole } from '$lib/server/services/authz.service';
 import {
 	finishAssignedRun,
 	getAssignedRun,
+	getAssignedRunLiveNavigation,
 	listDriverRouteHistory,
 	startAssignedRun,
 	submitRoadConditionIssue,
@@ -24,16 +25,43 @@ export const getCurrentRun = query(async () => {
 	return getAssignedRun(user.id);
 });
 
+export const getLiveNavigationRoute = command(
+	'unchecked',
+	async (input: {
+		runId: number | string;
+		latitude: number | string;
+		longitude: number | string;
+	}) => {
+		const event = getRequestEvent();
+		const user = requireExactRole(event, 'driver');
+		return getAssignedRunLiveNavigation({
+			driverUserId: user.id,
+			runId: Number(input.runId),
+			latitude: Number(input.latitude),
+			longitude: Number(input.longitude)
+		});
+	}
+);
+
 export const getDriverHistory = query('unchecked', async (input: { limit?: number } = {}) => {
 	const event = getRequestEvent();
 	const user = requireExactRole(event, 'driver');
 	return listDriverRouteHistory(user.id, input.limit ?? 8);
 });
 
-export const startRun = command('unchecked', async (input: { runId: number | string }) => {
+export const startRun = command(
+	'unchecked',
+	async (input: {
+		runId: number | string;
+		latitude?: number | string;
+		longitude?: number | string;
+	}) => {
 	const event = getRequestEvent();
 	const user = requireExactRole(event, 'driver');
-	return startAssignedRun(user.id, Number(input.runId));
+	return startAssignedRun(user.id, Number(input.runId), {
+		latitude: toOptionalNumber(input.latitude),
+		longitude: toOptionalNumber(input.longitude)
+	});
 });
 
 export const finishRun = command('unchecked', async (input: { runId: number | string }) => {
