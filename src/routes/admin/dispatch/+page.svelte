@@ -1,5 +1,6 @@
 <script lang="ts">
 	import AdminReportQueueCard from '$lib/components/AdminReportQueueCard.svelte';
+	import { formatLocationLabel } from '$lib/utils/location';
 	import {
 		assignRun,
 		listAllReports,
@@ -253,7 +254,7 @@
 													Stop {stop.sequence} • {stop.status}
 												</p>
 												<p class="mt-1 text-xs text-slate-500">
-													{stop.latitude.toFixed(5)}, {stop.longitude.toFixed(5)}
+													{formatLocationLabel(stop)}
 												</p>
 											</div>
 										{/each}

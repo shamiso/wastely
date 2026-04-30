@@ -1,6 +1,7 @@
 <script lang="ts">
 	import InsightMap from '$lib/components/InsightMap.svelte';
 	import { listDriverRouteReports } from '$lib/api/admin-dispatch.remote';
+	import { formatLocationLabel } from '$lib/utils/location';
 
 	const routeReports = listDriverRouteReports({ limit: 10 });
 	let selectedRunId = $state<number | null>(null);
@@ -52,7 +53,7 @@
 			...selectedRun.stops.map((stop) => ({
 				lat: stop.latitude,
 				lng: stop.longitude,
-				label: `Stop ${stop.sequence} • ${stop.status}`,
+				label: `Stop ${stop.sequence} • ${formatLocationLabel(stop)} • ${stop.status}`,
 				color: '#0f172a',
 				fillColor: stop.status === 'done' ? '#22c55e' : stop.status === 'skipped' ? '#f59e0b' : '#38bdf8',
 				radius: 7
@@ -206,7 +207,7 @@
 										<p class="text-xs uppercase tracking-[0.14em] text-slate-500">{stop.status}</p>
 									</div>
 									<p class="mt-2 text-xs text-slate-500">
-										{stop.latitude.toFixed(5)}, {stop.longitude.toFixed(5)}
+										{formatLocationLabel(stop)}
 									</p>
 									{#if stop.notes}
 										<p class="mt-2 text-sm text-slate-700">{stop.notes}</p>

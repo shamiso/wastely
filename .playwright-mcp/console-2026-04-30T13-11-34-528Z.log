@@ -15,3 +15,7 @@
 [  537082ms] Failed to register a ServiceWorker for scope ('http://127.0.0.1:5173/') with script ('http://127.0.0.1:5173/service-worker.js'): ServiceWorker script evaluation failed
 [  572085ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ http://127.0.0.1:5173/driver/run:0
 [  572121ms] Failed to register a ServiceWorker for scope ('http://127.0.0.1:5173/') with script ('http://127.0.0.1:5173/service-worker.js'): ServiceWorker script evaluation failed
+[ 1205204ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ http://127.0.0.1:5173/driver/run:0
+[ 1205254ms] Failed to register a ServiceWorker for scope ('http://127.0.0.1:5173/') with script ('http://127.0.0.1:5173/service-worker.js'): ServiceWorker script evaluation failed
+[ 1457127ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ http://127.0.0.1:5173/driver/run:0
+[ 1457173ms] Failed to register a ServiceWorker for scope ('http://127.0.0.1:5173/') with script ('http://127.0.0.1:5173/service-worker.js'): ServiceWorker script evaluation failed

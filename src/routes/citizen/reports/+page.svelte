@@ -5,6 +5,7 @@
 		listMyReports,
 		updateMyReport
 	} from '$lib/api/citizen-reports.remote';
+	import { formatLocationLabel } from '$lib/utils/location';
 
 	type ReportStatusTab = 'all' | 'open' | 'in_review' | 'resolved' | 'rejected';
 
@@ -179,7 +180,7 @@
 					markers={visibleReports.map((report) => ({
 						lat: report.latitude,
 						lng: report.longitude,
-						label: `#${report.id} • ${report.category.replace('_', ' ')} • ${report.status}`,
+						label: `#${report.id} • ${formatLocationLabel(report, { fallbackLabel: 'Pinned location' })} • ${report.category.replace('_', ' ')} • ${report.status}`,
 						color: '#0f172a',
 						fillColor: markerColor(report.status)
 					}))}
@@ -267,10 +268,7 @@
 						{:else}
 							<p class="mt-3 text-sm leading-6 text-slate-700">{report.description}</p>
 							<p class="mt-3 text-xs text-slate-500">
-								{report.latitude.toFixed(5)}, {report.longitude.toFixed(5)}
-								{#if report.zoneName}
-									• {report.zoneName}
-								{/if}
+								{formatLocationLabel(report, { fallbackLabel: 'Pinned location' })}
 							</p>
 							<p class="mt-1 text-xs text-slate-500">
 								Submitted {new Date(report.createdAt).toLocaleString()}

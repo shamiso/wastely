@@ -99,6 +99,7 @@ export type DriverRouteInsight = {
 		latitude: number;
 		longitude: number;
 		zoneId: number | null;
+		zoneName: string | null;
 		notes: string | null;
 	}>;
 	roadIssues: Array<{
@@ -620,9 +621,11 @@ export async function listDriverRouteInsights(limit = 8): Promise<DriverRouteIns
 				latitude: routeStop.latitude,
 				longitude: routeStop.longitude,
 				zoneId: routeStop.zoneId,
+				zoneName: zone.name,
 				notes: routeStop.notes
 			})
 			.from(routeStop)
+			.leftJoin(zone, eq(routeStop.zoneId, zone.id))
 			.where(inArray(routeStop.routeRunId, runIds))
 			.orderBy(asc(routeStop.sequence)),
 		db
@@ -666,6 +669,7 @@ export async function listDriverRouteInsights(limit = 8): Promise<DriverRouteIns
 			latitude: stop.latitude,
 			longitude: stop.longitude,
 			zoneId: stop.zoneId,
+			zoneName: stop.zoneName ?? null,
 			notes: stop.notes
 		});
 		stopsByRun.set(stop.runId, current);

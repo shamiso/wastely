@@ -1,6 +1,7 @@
 <script lang="ts">
 	import InsightMap from '$lib/components/InsightMap.svelte';
 	import RouteSegmentPickerMap from '$lib/components/RouteSegmentPickerMap.svelte';
+	import { formatLocationLabel } from '$lib/utils/location';
 	import {
 		getCurrentRun,
 		getDriverHistory,
@@ -68,7 +69,7 @@
 			...activeRoute.stops.map((stop) => ({
 				lat: stop.latitude,
 				lng: stop.longitude,
-				label: `Stop ${stop.sequence ?? stop.id}`,
+				label: `Stop ${stop.sequence ?? stop.id} • ${formatLocationLabel(stop)}`,
 				color: '#0f172a',
 				fillColor: '#38bdf8',
 				radius: 7
@@ -91,7 +92,13 @@
 		return [...new Map(
 			currentRun.current.stops
 				.filter((stop) => stop.zoneId !== null)
-				.map((stop) => [stop.zoneId, { zoneId: stop.zoneId as number, label: `Zone ${stop.zoneId}` }])
+				.map((stop) => [
+					stop.zoneId,
+					{
+						zoneId: stop.zoneId as number,
+						label: formatLocationLabel(stop, { fallbackLabel: `Zone ${stop.zoneId}` })
+					}
+				])
 		).values()];
 	}
 

@@ -13,7 +13,8 @@ import {
 	driverEventLog,
 	roadConditionReport,
 	routeRun,
-	routeStop
+	routeStop,
+	zone
 } from '$lib/server/db/schema';
 import { toYmdDate } from '$lib/server/services/date.service';
 
@@ -361,8 +362,24 @@ export async function getAssignedRun(driverUserId: string, runDate = toYmdDate()
 	if (!run) return null;
 
 	const stops = await db
-		.select()
+		.select({
+			id: routeStop.id,
+			routeRunId: routeStop.routeRunId,
+			zoneId: routeStop.zoneId,
+			zoneName: zone.name,
+			sourceReportId: routeStop.sourceReportId,
+			sequence: routeStop.sequence,
+			latitude: routeStop.latitude,
+			longitude: routeStop.longitude,
+			action: routeStop.action,
+			status: routeStop.status,
+			notes: routeStop.notes,
+			completedAt: routeStop.completedAt,
+			createdAt: routeStop.createdAt,
+			updatedAt: routeStop.updatedAt
+		})
 		.from(routeStop)
+		.leftJoin(zone, eq(routeStop.zoneId, zone.id))
 		.where(eq(routeStop.routeRunId, run.id))
 		.orderBy(asc(routeStop.sequence));
 
@@ -765,8 +782,24 @@ export async function listDriverRouteHistory(driverUserId: string, limit = 8) {
 	const histories = [];
 	for (const run of runs) {
 		const stops = await db
-			.select()
+			.select({
+				id: routeStop.id,
+				routeRunId: routeStop.routeRunId,
+				zoneId: routeStop.zoneId,
+				zoneName: zone.name,
+				sourceReportId: routeStop.sourceReportId,
+				sequence: routeStop.sequence,
+				latitude: routeStop.latitude,
+				longitude: routeStop.longitude,
+				action: routeStop.action,
+				status: routeStop.status,
+				notes: routeStop.notes,
+				completedAt: routeStop.completedAt,
+				createdAt: routeStop.createdAt,
+				updatedAt: routeStop.updatedAt
+			})
 			.from(routeStop)
+			.leftJoin(zone, eq(routeStop.zoneId, zone.id))
 			.where(eq(routeStop.routeRunId, run.id))
 			.orderBy(asc(routeStop.sequence));
 

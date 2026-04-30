@@ -70,6 +70,7 @@ export type DispatchRun = {
 		id: number;
 		sequence: number;
 		zoneId: number | null;
+		zoneName: string | null;
 		sourceReportId: number | null;
 		latitude: number;
 		longitude: number;
@@ -589,12 +590,14 @@ export async function listDispatchRuns(runDate = toYmdDate()): Promise<DispatchR
 			routeRunId: routeStop.routeRunId,
 			sequence: routeStop.sequence,
 			zoneId: routeStop.zoneId,
+			zoneName: zone.name,
 			sourceReportId: routeStop.sourceReportId,
 			latitude: routeStop.latitude,
 			longitude: routeStop.longitude,
 			status: routeStop.status
 		})
 		.from(routeStop)
+		.leftJoin(zone, eq(routeStop.zoneId, zone.id))
 		.where(inArray(routeStop.routeRunId, runIds))
 		.orderBy(routeStop.sequence);
 
@@ -617,6 +620,7 @@ export async function listDispatchRuns(runDate = toYmdDate()): Promise<DispatchR
 			id: stop.id,
 			sequence: stop.sequence,
 			zoneId: stop.zoneId,
+			zoneName: stop.zoneName ?? null,
 			sourceReportId: stop.sourceReportId,
 			latitude: stop.latitude,
 			longitude: stop.longitude,

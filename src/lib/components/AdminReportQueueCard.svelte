@@ -4,6 +4,7 @@
 		dispatchReport,
 		resolveReport
 	} from '$lib/api/admin-dispatch.remote';
+	import { formatLocationLabel } from '$lib/utils/location';
 
 	type CitizenReportCard = {
 		id: number;
@@ -264,7 +265,7 @@
 		<div class="rounded-[1.1rem] bg-white/80 px-3 py-3">
 			<p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Location</p>
 			<p class="mt-1 text-sm font-semibold text-slate-900">
-				{report.latitude.toFixed(5)}, {report.longitude.toFixed(5)}
+				{formatLocationLabel(report, { fallbackLabel: 'Pinned report location' })}
 			</p>
 		</div>
 		<div class="rounded-[1.1rem] bg-white/80 px-3 py-3">

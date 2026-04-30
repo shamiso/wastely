@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { haversineDistanceKm } from '$lib/domain/route-optimizer';
 	import InsightMap from '$lib/components/InsightMap.svelte';
+	import { formatLocationLabel } from '$lib/utils/location';
 	import {
 		finishRun,
 		getCurrentRun,
@@ -168,6 +169,15 @@
 	function formatAccuracy(value: number | null | undefined) {
 		if (value === null || value === undefined || !Number.isFinite(value)) return 'Awaiting GPS';
 		return `${Math.round(value)} m`;
+	}
+
+	function formatStopLocation(stop: {
+		zoneName?: string | null;
+		zoneId?: number | null;
+		latitude: number;
+		longitude: number;
+	}) {
+		return formatLocationLabel(stop);
 	}
 
 	function trafficWeight(issue: {
@@ -459,8 +469,8 @@
 				lng: stop.longitude,
 				label:
 					stop.id === nextDynamicStopId
-						? `Next stop ${stop.sequence} • ${stop.status}`
-						: `Stop ${stop.sequence} • ${stop.status}`,
+						? `Next stop ${stop.sequence} • ${formatStopLocation(stop)} • ${stop.status}`
+						: `Stop ${stop.sequence} • ${formatStopLocation(stop)} • ${stop.status}`,
 				color: '#0f172a',
 				fillColor:
 					stop.status === 'done'
@@ -752,7 +762,7 @@
 							</p>
 							<p class="mt-2 text-sm text-white/78">
 								{nextPendingStop
-									? `${nextPendingStop.latitude.toFixed(5)}, ${nextPendingStop.longitude.toFixed(5)}`
+									? formatStopLocation(nextPendingStop)
 									: 'All assigned stops are done or skipped.'}
 							</p>
 						</div>
@@ -802,7 +812,7 @@
 												{index === 0 ? 'Next stop' : 'Then'} • Stop {item.stop.sequence}
 											</p>
 											<p class="mt-1 text-xs text-slate-500">
-												{item.stop.latitude.toFixed(5)}, {item.stop.longitude.toFixed(5)}
+												{formatStopLocation(item.stop)}
 											</p>
 										</div>
 										<div class="text-right">
@@ -889,10 +899,7 @@
 										</span>
 									</div>
 									<p class="mt-1 text-xs text-slate-500">
-										{stop.latitude.toFixed(5)}, {stop.longitude.toFixed(5)}
-										{#if stop.zoneId}
-											• Zone {stop.zoneId}
-										{/if}
+										{formatStopLocation(stop)}
 									</p>
 									{#if stop.status !== 'pending'}
 										<p class="mt-2 text-xs font-medium text-slate-500">
