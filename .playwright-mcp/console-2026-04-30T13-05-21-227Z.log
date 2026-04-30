@@ -1,0 +1,10 @@
+[      84ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://127.0.0.1:5173/login:0
+[     135ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ http://127.0.0.1:5173/login:0
+[     253ms] Failed to register a ServiceWorker for scope ('http://127.0.0.1:5173/') with script ('http://127.0.0.1:5173/service-worker.js'): ServiceWorker script evaluation failed
+[  150882ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://127.0.0.1:5173/login:0
+[  150888ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ http://127.0.0.1:5173/login:0
+[  150947ms] Failed to register a ServiceWorker for scope ('http://127.0.0.1:5173/') with script ('http://127.0.0.1:5173/service-worker.js'): ServiceWorker script evaluation failed
+[  324846ms] [ERROR] Failed to load resource: the server responded with a status of 405 (Method Not Allowed) @ http://127.0.0.1:5173/logout:0
+[  325650ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:5173/favicon.ico:0
+[  333340ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ http://127.0.0.1:5173/admin/dashboard:0
+[  333404ms] Failed to register a ServiceWorker for scope ('http://127.0.0.1:5173/') with script ('http://127.0.0.1:5173/service-worker.js'): ServiceWorker script evaluation failed
