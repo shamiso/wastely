@@ -1,10 +1,9 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { haversineDistanceKm } from '$lib/domain/route-optimizer';
 	import InsightMap from '$lib/components/InsightMap.svelte';
 	import { formatLocationLabel } from '$lib/utils/location';
 	import {
-		finishRun,
 		getCurrentRun,
 		getLiveNavigationRoute,
 		startRun,
@@ -56,7 +55,6 @@
 	let roadConditionNotes = $state('');
 	let missedPickups = $state('0');
 	let submittingSummary = $state(false);
-	let finishingRun = $state(false);
 	let updatingStopId = $state<number | null>(null);
 	let checklistMessage = $state('');
 	let checklistTone = $state<'success' | 'danger'>('success');
@@ -85,17 +83,6 @@
 		await refreshLiveNavigation(true);
 	}
 
-	async function finishCurrentRun(runId: number) {
-		finishingRun = true;
-		try {
-			await finishRun({ runId });
-			await currentRun.refresh();
-			liveNavigation = null;
-		} finally {
-			finishingRun = false;
-		}
-	}
-
 	async function markStop(runId: number, stopId: number, status: 'done' | 'skipped') {
 		updatingStopId = stopId;
 		checklistMessage = '';
@@ -105,10 +92,22 @@
 				stopId,
 				status
 			});
-			checklistTone = 'success';
-			checklistMessage = `Stop ${stopId} marked ${status === 'done' ? 'done' : 'skipped'}.`;
 			await currentRun.refresh();
 			await refreshLiveNavigation(true);
+			checklistTone = 'success';
+			if (currentRun.current?.run.status === 'completed') {
+				checklistMessage = 'Run completed. Continue with the driver report below.';
+				await tick();
+				document.getElementById('driver-report')?.scrollIntoView({
+					behavior: 'smooth',
+					block: 'start'
+				});
+			} else {
+				checklistMessage =
+					status === 'done'
+						? `Stop ${stopId} marked as arrived.`
+						: `Stop ${stopId} moved to skipped.`;
+			}
 		} catch (error) {
 			checklistTone = 'danger';
 			checklistMessage =
@@ -123,6 +122,29 @@
 	async function markCurrentStop(stopId: number, status: 'done' | 'skipped') {
 		if (!currentRun.current) return;
 		await markStop(currentRun.current.run.id, stopId, status);
+	}
+
+	async function undoStop(stopId: number) {
+		if (!currentRun.current) return;
+		updatingStopId = stopId;
+		checklistMessage = '';
+		try {
+			await submitStop({
+				runId: currentRun.current.run.id,
+				stopId,
+				status: 'pending'
+			});
+			await currentRun.refresh();
+			await refreshLiveNavigation(true);
+			checklistTone = 'success';
+			checklistMessage = `Stop ${stopId} moved back into the checklist.`;
+		} catch (error) {
+			checklistTone = 'danger';
+			checklistMessage =
+				error instanceof Error && error.message ? error.message : `Could not undo stop ${stopId}.`;
+		} finally {
+			updatingStopId = null;
+		}
 	}
 
 	async function saveRunSummary() {
@@ -208,15 +230,24 @@
 			zoneId: number | null;
 			status: 'pending' | 'done' | 'skipped';
 			completedAt: number | null;
+			updatedAt: number;
 		}>,
 		liveStopIds: number[]
 	) {
 		const liveOrder = new Map(liveStopIds.map((stopId, index) => [stopId, index]));
+		const statusOrder = new Map<
+			'pending' | 'done' | 'skipped',
+			number
+		>([
+			['pending', 0],
+			['done', 1],
+			['skipped', 2]
+		]);
 
 		return [...stops].sort((a, b) => {
-			if (a.status === 'pending' && b.status !== 'pending') return -1;
-			if (a.status !== 'pending' && b.status === 'pending') return 1;
-			if (a.status !== 'pending' && b.status !== 'pending') return a.sequence - b.sequence;
+			const statusDifference = (statusOrder.get(a.status) ?? 0) - (statusOrder.get(b.status) ?? 0);
+			if (statusDifference !== 0) return statusDifference;
+			if (a.status !== 'pending') return a.sequence - b.sequence;
 			return (
 				(liveOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
 				(liveOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)
@@ -225,9 +256,26 @@
 	}
 
 	function stopStatusTone(status: 'pending' | 'done' | 'skipped') {
-		if (status === 'done') return 'bg-emerald-100 text-emerald-700';
+		if (status === 'done') return 'bg-slate-200 text-slate-700';
 		if (status === 'skipped') return 'bg-amber-100 text-amber-700';
 		return 'bg-sky-100 text-sky-700';
+	}
+
+	function stopCardClass(status: 'pending' | 'done' | 'skipped') {
+		if (status === 'done') return 'border-slate-200 bg-slate-100 text-slate-500';
+		if (status === 'skipped') return 'border-amber-200 bg-amber-50 text-slate-700';
+		return 'border-sky-100 bg-gradient-to-br from-white to-sky-50 text-slate-900';
+	}
+
+	function stopHandledLabel(stop: {
+		status: 'pending' | 'done' | 'skipped';
+		completedAt: number | null;
+		updatedAt: number;
+	}) {
+		if (stop.status === 'pending') return '';
+		const timestamp = stop.completedAt ?? stop.updatedAt;
+		const prefix = stop.status === 'done' ? 'Arrived' : 'Skipped';
+		return `${prefix} ${new Date(timestamp).toLocaleString()}.`;
 	}
 
 	function handleLocationError(error: GeolocationPositionError) {
@@ -547,11 +595,7 @@
 			null
 	);
 	let pendingStops = $derived(currentRun.current?.stops.filter((stop) => stop.status === 'pending') ?? []);
-	let canFinishRun = $derived(
-		!!currentRun.current &&
-			pendingStops.length === 0 &&
-			currentRun.current.run.status !== 'completed'
-	);
+	let allStopsHandled = $derived(!!currentRun.current && pendingStops.length === 0);
 	let optimizerPlan = $derived(
 		currentRun.current
 			? displayedStops
@@ -602,12 +646,6 @@
 					</div>
 
 					<div class="flex flex-wrap gap-2">
-						<a
-							href="/driver/reports"
-							class="rounded-full border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-sky-900 hover:bg-sky-50"
-						>
-							Report road issue
-						</a>
 						{#if currentRun.current.run.status === 'planned'}
 							<button
 								type="button"
@@ -616,15 +654,13 @@
 							>
 								Start run
 							</button>
-						{:else if canFinishRun}
-							<button
-								type="button"
-								onclick={() => finishCurrentRun(currentRun.current!.run.id)}
-								disabled={finishingRun}
-								class="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+						{:else if currentRun.current.run.status === 'completed'}
+							<a
+								href="#driver-report"
+								class="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
 							>
-								{finishingRun ? 'Finishing…' : 'Finish run'}
-							</button>
+								Open driver report
+							</a>
 						{/if}
 					</div>
 				</div>
@@ -837,32 +873,24 @@
 						<h2 class="font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
 							Stop checklist
 						</h2>
-						<p class="text-sm text-slate-600">Mark each stop as done or skipped as you work through the live route.</p>
+						<p class="text-sm text-slate-600">Mark each stop as arrived or skipped as you work through the live route.</p>
 					</div>
-					<div class="flex flex-wrap gap-2">
-						<button
-							type="button"
-							onclick={() => currentRun.refresh()}
-							class="rounded-full border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-sky-900 hover:bg-sky-50"
-						>
-							Refresh
-						</button>
-						{#if canFinishRun}
-							<button
-								type="button"
-								onclick={() => finishCurrentRun(currentRun.current!.run.id)}
-								disabled={finishingRun}
-								class="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
-							>
-								{finishingRun ? 'Finishing…' : 'Finish run'}
-							</button>
-						{/if}
-					</div>
+					<button
+						type="button"
+						onclick={() => currentRun.refresh()}
+						class="rounded-full border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-sky-900 hover:bg-sky-50"
+					>
+						Refresh
+					</button>
 				</div>
 
-				{#if canFinishRun}
+				{#if allStopsHandled}
 					<div class="rounded-[1.25rem] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-						All stops have been handled. Finish the run to mark the collection route as complete.
+						{#if currentRun.current.run.status === 'completed'}
+							Run completed. Continue with the driver report below.
+						{:else}
+							All stops have been handled. The run is being completed.
+						{/if}
 					</div>
 				{/if}
 
@@ -880,11 +908,11 @@
 
 				<div class="grid gap-4">
 					{#each displayedStops as stop}
-						<article class="rounded-[1.5rem] border border-sky-100 bg-gradient-to-br from-white to-sky-50 p-4">
+						<article class={`rounded-[1.5rem] border p-4 ${stopCardClass(stop.status)}`}>
 							<div class="flex flex-wrap items-center justify-between gap-3">
 								<div>
 									<div class="flex flex-wrap items-center gap-2">
-										<p class="font-semibold text-slate-900">
+										<p class={`font-semibold ${stop.status === 'done' ? 'text-slate-600 line-through' : 'text-slate-900'}`}>
 										Stop {stop.sequence}
 										{#if stop.id === (liveStopIds[0] ?? -1)}
 											<span class="ml-2 rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-cyan-700">
@@ -903,7 +931,7 @@
 									</p>
 									{#if stop.status !== 'pending'}
 										<p class="mt-2 text-xs font-medium text-slate-500">
-											Handled {stop.completedAt ? new Date(stop.completedAt).toLocaleString() : 'already'}.
+											{stopHandledLabel(stop)}
 										</p>
 									{/if}
 								</div>
@@ -917,22 +945,33 @@
 									>
 										Open map
 									</a>
-									<button
-										type="button"
-										onclick={() => markCurrentStop(stop.id, 'done')}
-										disabled={stop.status !== 'pending' || updatingStopId === stop.id}
-										class="rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-									>
-										{updatingStopId === stop.id ? 'Saving…' : 'I have arrived'}
-									</button>
-									<button
-										type="button"
-										onclick={() => markCurrentStop(stop.id, 'skipped')}
-										disabled={stop.status !== 'pending' || updatingStopId === stop.id}
-										class="rounded-full bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
-									>
-										{updatingStopId === stop.id ? 'Saving…' : 'Skip stop'}
-									</button>
+									{#if stop.status === 'pending'}
+										<button
+											type="button"
+											onclick={() => markCurrentStop(stop.id, 'done')}
+											disabled={updatingStopId === stop.id}
+											class="rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+										>
+											{updatingStopId === stop.id ? 'Saving…' : 'I have arrived'}
+										</button>
+										<button
+											type="button"
+											onclick={() => markCurrentStop(stop.id, 'skipped')}
+											disabled={updatingStopId === stop.id}
+											class="rounded-full bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+										>
+											{updatingStopId === stop.id ? 'Saving…' : 'Skip stop'}
+										</button>
+									{:else}
+										<button
+											type="button"
+											onclick={() => undoStop(stop.id)}
+											disabled={updatingStopId === stop.id}
+											class="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+										>
+											{updatingStopId === stop.id ? 'Undoing…' : 'Undo'}
+										</button>
+									{/if}
 								</div>
 							</div>
 						</article>
@@ -941,13 +980,13 @@
 			</section>
 
 			{#if currentRun.current.run.status === 'completed'}
-				<section class="space-y-4 rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
+				<section id="driver-report" class="space-y-4 rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
 					<h2 class="font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
-						Run summary
+						Driver report
 					</h2>
 					{#if currentRun.current.summary}
 						<div class="rounded-[1.4rem] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-							Run summary submitted on {new Date(currentRun.current.summary.createdAt).toLocaleString()}.
+							Driver report submitted on {new Date(currentRun.current.summary.createdAt).toLocaleString()}.
 						</div>
 					{/if}
 
@@ -1008,7 +1047,7 @@
 						disabled={submittingSummary || !!currentRun.current.summary}
 						class="rounded-full bg-sky-950 px-5 py-3 text-sm font-semibold text-white hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
 					>
-						{submittingSummary ? 'Saving summary…' : currentRun.current.summary ? 'Summary already saved' : 'Save run summary'}
+						{submittingSummary ? 'Saving report…' : currentRun.current.summary ? 'Report already saved' : 'Save driver report'}
 					</button>
 				</section>
 			{/if}

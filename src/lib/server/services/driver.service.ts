@@ -563,7 +563,41 @@ export async function submitStopUpdate(input: {
 			.where(eq(citizenReport.id, updatedStop.sourceReportId));
 	}
 
-	if (run.status === 'planned') {
+	const pendingStops = await db
+		.select({ id: routeStop.id })
+		.from(routeStop)
+		.where(and(eq(routeStop.routeRunId, input.runId), eq(routeStop.status, 'pending')))
+		.limit(1);
+
+	if (pendingStops.length === 0 && run.status !== 'completed') {
+		await db
+			.update(routeRun)
+			.set({
+				status: 'completed',
+				startedAt: run.startedAt ?? timestamp,
+				completedAt: timestamp,
+				updatedAt: timestamp
+			})
+			.where(eq(routeRun.id, input.runId));
+		await db.insert(driverEventLog).values({
+			routeRunId: input.runId,
+			driverUserId: input.driverUserId,
+			eventType: 'run_completed',
+			payloadJson: JSON.stringify({
+				completedAt: timestamp,
+				autoCompleted: true
+			})
+		});
+	} else if (pendingStops.length > 0 && run.status === 'completed') {
+		await db
+			.update(routeRun)
+			.set({
+				status: 'in_progress',
+				completedAt: null,
+				updatedAt: timestamp
+			})
+			.where(eq(routeRun.id, input.runId));
+	} else if (run.status === 'planned') {
 		await db
 			.update(routeRun)
 			.set({

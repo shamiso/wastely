@@ -19,3 +19,20 @@
 [ 1205254ms] Failed to register a ServiceWorker for scope ('http://127.0.0.1:5173/') with script ('http://127.0.0.1:5173/service-worker.js'): ServiceWorker script evaluation failed
 [ 1457127ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ http://127.0.0.1:5173/driver/run:0
 [ 1457173ms] Failed to register a ServiceWorker for scope ('http://127.0.0.1:5173/') with script ('http://127.0.0.1:5173/service-worker.js'): ServiceWorker script evaluation failed
+[25496297ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[25529458ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ http://127.0.0.1:5173/driver/run:0
+[25529519ms] Failed to register a ServiceWorker for scope ('http://127.0.0.1:5173/') with script ('http://127.0.0.1:5173/service-worker.js'): ServiceWorker script evaluation failed
+[26050628ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[26055905ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ http://127.0.0.1:5173/driver/run:0
+[26055945ms] Failed to register a ServiceWorker for scope ('http://127.0.0.1:5173/') with script ('http://127.0.0.1:5173/service-worker.js'): ServiceWorker script evaluation failed
+[69055376ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[69060638ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ http://127.0.0.1:5173/driver/run:0
+[69060692ms] Failed to register a ServiceWorker for scope ('http://127.0.0.1:5173/') with script ('http://127.0.0.1:5173/service-worker.js'): ServiceWorker script evaluation failed
+[75855558ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[75860779ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ http://127.0.0.1:5173/driver/run:0
+[75860836ms] Failed to register a ServiceWorker for scope ('http://127.0.0.1:5173/') with script ('http://127.0.0.1:5173/service-worker.js'): ServiceWorker script evaluation failed
+[90877782ms] [ERROR] Failed to load resource: net::ERR_TIMED_OUT @ https://router.project-osrm.org/route/v1/driving/31.045,-17.905;31.057149,-17.897746;31.0723,-17.8895?overview=full&geometries=geojson&steps=false:0
+[103935706ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[103962179ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ http://127.0.0.1:5173/driver/run:0
+[103962240ms] Failed to register a ServiceWorker for scope ('http://127.0.0.1:5173/') with script ('http://127.0.0.1:5173/service-worker.js'): ServiceWorker script evaluation failed
+[104010986ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:5173/_app/remote/18hz62z/getLiveNavigationRoute:0
