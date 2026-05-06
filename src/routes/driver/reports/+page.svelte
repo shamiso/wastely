@@ -1,5 +1,6 @@
 <script lang="ts">
 	import InsightMap from '$lib/components/InsightMap.svelte';
+	import PrintPageButton from '$lib/components/PrintPageButton.svelte';
 	import RouteSegmentPickerMap from '$lib/components/RouteSegmentPickerMap.svelte';
 	import { formatLocationLabel } from '$lib/utils/location';
 	import {
@@ -141,11 +142,17 @@
 
 <div class="space-y-6">
 	<section class="overflow-hidden rounded-[2rem] bg-gradient-to-br from-amber-300 via-orange-400 to-rose-500 p-6 text-slate-950 shadow-[0_24px_70px_rgba(8,47,73,0.16)]">
-		<p class="text-xs font-semibold uppercase tracking-[0.28em] text-slate-900/65">Driver reports</p>
-		<h1 class="mt-2 font-[Georgia] text-4xl font-semibold tracking-tight">Mark exactly where the road gets bad</h1>
-		<p class="mt-3 max-w-2xl text-sm leading-6 text-slate-900/78">
-			Report congestion, potholes, flooding, closures, and other route issues between two streets or two points on the map.
-		</p>
+		<div class="flex flex-wrap items-start justify-between gap-4">
+			<div>
+				<p class="text-xs font-semibold uppercase tracking-[0.28em] text-slate-900/65">Driver reports</p>
+				<h1 class="mt-2 font-[Georgia] text-4xl font-semibold tracking-tight">Mark exactly where the road gets bad</h1>
+				<p class="mt-3 max-w-2xl text-sm leading-6 text-slate-900/78">
+					Report congestion, potholes, flooding, closures, and other route issues between two streets or two points on the map.
+				</p>
+			</div>
+
+			<PrintPageButton label="Print route report" />
+		</div>
 	</section>
 
 	<section class="rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
@@ -164,6 +171,7 @@
 					currentRun.refresh();
 					history.refresh();
 				}}
+				data-print-ignore="true"
 				class="rounded-full border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-sky-900 hover:bg-sky-50"
 			>
 				Refresh
@@ -185,7 +193,10 @@
 		</div>
 	</section>
 
-	<section class="space-y-5 rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
+	<section
+		class="space-y-5 rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur"
+		data-print-ignore="true"
+	>
 		<div>
 			<h2 class="font-[Georgia] text-2xl font-semibold tracking-tight text-sky-950">
 				Report a road issue
@@ -301,6 +312,7 @@
 			type="button"
 			onclick={reportRoadIssue}
 			disabled={!roadDescription.trim() || submittingIssue}
+			data-print-ignore="true"
 			class="rounded-full bg-sky-950 px-5 py-3 text-sm font-semibold text-white hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
 		>
 			{submittingIssue ? 'Submitting…' : 'Submit road issue'}

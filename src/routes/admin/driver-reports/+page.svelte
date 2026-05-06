@@ -1,5 +1,6 @@
 <script lang="ts">
 	import InsightMap from '$lib/components/InsightMap.svelte';
+	import PrintPageButton from '$lib/components/PrintPageButton.svelte';
 	import { listDriverRouteReports } from '$lib/api/admin-dispatch.remote';
 	import { formatLocationLabel } from '$lib/utils/location';
 
@@ -74,13 +75,19 @@
 
 <div class="space-y-6">
 	<section class="rounded-[2rem] border border-white/70 bg-white/85 p-6 shadow-[0_24px_70px_rgba(8,47,73,0.12)] backdrop-blur">
-		<p class="text-xs font-semibold uppercase tracking-[0.28em] text-teal-700">Driver Reports</p>
-		<h1 class="mt-2 font-[Georgia] text-4xl font-semibold tracking-tight text-sky-950">
-			Route playback and road condition review
-		</h1>
-		<p class="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
-			Inspect the route a driver took, compare estimated and elapsed time, and review congestion or road-surface issues reported along that path.
-		</p>
+		<div class="flex flex-wrap items-start justify-between gap-4">
+			<div>
+				<p class="text-xs font-semibold uppercase tracking-[0.28em] text-teal-700">Driver Reports</p>
+				<h1 class="mt-2 font-[Georgia] text-4xl font-semibold tracking-tight text-sky-950">
+					Route playback and road condition review
+				</h1>
+				<p class="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
+					Inspect the route a driver took, compare estimated and elapsed time, and review congestion or road-surface issues reported along that path.
+				</p>
+			</div>
+
+			<PrintPageButton label="Print run" />
+		</div>
 	</section>
 
 	<div class="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
@@ -95,6 +102,7 @@
 				<button
 					type="button"
 					onclick={() => routeReports.refresh()}
+					data-print-ignore="true"
 					class="rounded-full bg-sky-950 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-900"
 				>
 					Refresh
@@ -111,6 +119,7 @@
 						<button
 							type="button"
 							onclick={() => (selectedRunId = run.runId)}
+							data-print-ignore="true"
 							class={`rounded-[1.4rem] border p-4 text-left transition ${
 								selectedRunId === run.runId
 									? 'border-sky-300 bg-sky-50'

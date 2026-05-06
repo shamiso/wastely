@@ -1,6 +1,7 @@
 <script lang="ts">
 	import AdminReportQueueCard from '$lib/components/AdminReportQueueCard.svelte';
 	import InsightMap from '$lib/components/InsightMap.svelte';
+	import PrintPageButton from '$lib/components/PrintPageButton.svelte';
 	import { citizenReportMap } from '$lib/api/dashboard.remote';
 	import {
 		listAllReports,
@@ -126,9 +127,11 @@
 			</div>
 
 			<div class="flex gap-2">
+				<PrintPageButton label="Print reports" />
 				<button
 					type="button"
 					onclick={refreshPage}
+					data-print-ignore="true"
 					disabled={refreshing}
 					class="rounded-full bg-sky-950 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
 				>
@@ -136,6 +139,7 @@
 				</button>
 				<a
 					href="/admin/driver-reports"
+					data-print-ignore="true"
 					class="rounded-full border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-sky-900 hover:bg-sky-50"
 				>
 					Open driver reports
@@ -239,6 +243,7 @@
 					onclick={() => {
 						selectedQueueFilter = filter.id;
 					}}
+					data-print-ignore="true"
 					class={`rounded-full px-4 py-2 text-sm font-semibold transition ${
 						selectedQueueFilter === filter.id
 							? 'bg-sky-950 text-white shadow-lg'

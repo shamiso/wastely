@@ -234,6 +234,7 @@
 				<button
 					type="button"
 					onclick={openResolve}
+					data-print-ignore="true"
 					disabled={assigning || rejecting || deleting}
 					class="rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
 				>
@@ -242,6 +243,7 @@
 				<button
 					type="button"
 					onclick={handleReject}
+					data-print-ignore="true"
 					disabled={assigning || rejecting || deleting}
 					class="rounded-full bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
 				>
@@ -252,6 +254,7 @@
 				<button
 					type="button"
 					onclick={handleDelete}
+					data-print-ignore="true"
 					disabled={assigning || rejecting || deleting}
 					class="rounded-full bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-60"
 				>
@@ -302,7 +305,7 @@
 	</div>
 
 	{#if resolveOpen}
-		<div class="mt-4 rounded-[1.35rem] border border-emerald-100 bg-white/90 p-4">
+		<div class="mt-4 rounded-[1.35rem] border border-emerald-100 bg-white/90 p-4" data-print-ignore="true">
 			<div class="flex flex-wrap items-center justify-between gap-2">
 				<div>
 					<p class="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">

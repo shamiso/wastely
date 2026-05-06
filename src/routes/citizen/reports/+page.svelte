@@ -1,5 +1,6 @@
 <script lang="ts">
 	import InsightMap from '$lib/components/InsightMap.svelte';
+	import PrintPageButton from '$lib/components/PrintPageButton.svelte';
 	import {
 		deleteMyReport,
 		listMyReports,
@@ -98,11 +99,17 @@
 
 <div class="space-y-6">
 	<section class="overflow-hidden rounded-[2rem] bg-gradient-to-br from-teal-500 via-cyan-600 to-sky-700 p-6 text-white shadow-[0_24px_70px_rgba(8,47,73,0.16)]">
-		<p class="text-xs font-semibold uppercase tracking-[0.28em] text-white/70">My reports</p>
-		<h1 class="mt-2 font-[Georgia] text-4xl font-semibold tracking-tight">Track every report you’ve sent</h1>
-		<p class="mt-3 max-w-2xl text-sm leading-6 text-white/82">
-			See where your submissions are on the map, check their status, and update open reports when the situation changes.
-		</p>
+		<div class="flex flex-wrap items-start justify-between gap-4">
+			<div>
+				<p class="text-xs font-semibold uppercase tracking-[0.28em] text-white/70">My reports</p>
+				<h1 class="mt-2 font-[Georgia] text-4xl font-semibold tracking-tight">Track every report you’ve sent</h1>
+				<p class="mt-3 max-w-2xl text-sm leading-6 text-white/82">
+					See where your submissions are on the map, check their status, and update open reports when the situation changes.
+				</p>
+			</div>
+
+			<PrintPageButton label="Print my reports" />
+		</div>
 	</section>
 
 	{#if reports.ready}
@@ -142,6 +149,7 @@
 						selectedStatus = tab.id;
 						cancelEdit();
 					}}
+					data-print-ignore="true"
 					class={`rounded-full px-4 py-2 text-sm font-semibold transition ${
 						selectedStatus === tab.id
 							? 'bg-sky-950 text-white shadow-lg'
@@ -167,6 +175,7 @@
 			<button
 				type="button"
 				onclick={() => reports.refresh()}
+				data-print-ignore="true"
 				class="rounded-full bg-sky-950 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-900"
 			>
 				Refresh
@@ -252,6 +261,7 @@
 									<button
 										type="button"
 										onclick={() => saveEdit(report.id)}
+										data-print-ignore="true"
 										class="rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-400"
 									>
 										Save changes
@@ -259,6 +269,7 @@
 									<button
 										type="button"
 										onclick={cancelEdit}
+										data-print-ignore="true"
 										class="rounded-full border border-sky-200 bg-white px-4 py-2 text-xs font-semibold text-sky-900 hover:bg-sky-50"
 									>
 										Cancel
@@ -284,6 +295,7 @@
 												category: report.category,
 												description: report.description
 											})}
+										data-print-ignore="true"
 										class="rounded-full border border-sky-200 bg-white px-4 py-2 text-xs font-semibold text-sky-900 hover:bg-sky-50"
 									>
 										Edit
@@ -291,6 +303,7 @@
 									<button
 										type="button"
 										onclick={() => removeReport(report.id)}
+										data-print-ignore="true"
 										class="rounded-full bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-500"
 									>
 										Delete

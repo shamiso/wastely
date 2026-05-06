@@ -288,3 +288,57 @@ body {
 :global(.leaflet-control-attribution) {
 	font-size: 11px;
 }
+
+@media print {
+	html {
+		background: #fff;
+	}
+
+	body {
+		background: #fff;
+		color: #0f172a;
+	}
+
+	.admin-backdrop,
+	.app-backdrop,
+	.admin-header,
+	.public-header,
+	.app-header,
+	.app-bottom-nav,
+	[data-print-ignore='true'] {
+		display: none !important;
+	}
+
+	.admin-main,
+	.app-main,
+	.public-main {
+		max-width: none;
+		margin: 0;
+		padding: 0;
+	}
+
+	.admin-shell,
+	.app-shell,
+	.public-shell,
+	.admin-main,
+	.app-main,
+	.public-main {
+		min-height: auto;
+	}
+
+	.map-picker-shell {
+		border-color: #cbd5e1;
+		background: #fff;
+		box-shadow: none;
+		break-inside: avoid;
+	}
+
+	.map-picker-canvas {
+		height: 18rem;
+	}
+
+	a {
+		color: inherit;
+		text-decoration: none;
+	}
+}
